@@ -2,7 +2,7 @@
 
 > A living document. This is our knowledge base — everything we learn about TTS, COM, audio, companies, models, and system internals goes here. Not a README. A reference manual built through exploration.
 
-**Last updated:** 2026-02-28
+**Last updated:** 2026-02-28 (v2 — added prior art, architecture decision, UX design)
 
 ---
 
@@ -17,7 +17,9 @@
 - [7. Audio Engineering](#7-audio-engineering)
 - [8. Key Specifications & Formats](#8-key-specifications--formats)
 - [9. Related Projects & Prior Art](#9-related-projects--prior-art)
-- [10. Glossary](#10-glossary)
+- [10. Architecture Decision](#10-architecture-decision)
+- [11. User Experience Design](#11-user-experience-design)
+- [12. Glossary](#12-glossary)
 
 ---
 
@@ -539,19 +541,300 @@ These appear in voice token registration (`409` = en-US for David/Zira).
 
 ### Projects That Have Done Something Similar
 
-*(To be researched — searching GitHub for SAPI bridge projects)*
+We researched GitHub on 2026-02-28 for projects that bridge custom/neural TTS into SAPI. Here's what exists:
 
-| Project | Approach | Status | Notes |
-|---------|----------|--------|-------|
-| *(to be filled)* | | | |
+| Project | Stars | Language | Approach | Status |
+|---------|-------|----------|----------|--------|
+| **NaturalVoiceSAPIAdapter** | 680 | C++ | Bridges Azure Neural voices to SAPI via COM DLL | Active, mature |
+| **windows-text-to-speech** | 11 | Rust | SAPI engine DLL with Piper TTS support | Active |
+| **PySpTTSEnginePoC** | 0 | Python | Pure Python COM SAPI engine using comtypes | PoC, inactive |
 
-### Microsoft Speech Platform
+### NaturalVoiceSAPIAdapter (gexgd0419) — The Gold Standard
 
-A separate installable runtime (not built into Windows) that provides additional voices. Some are better than David/Zira. Not widely known.
+**Repo:** https://github.com/gexgd0419/NaturalVoiceSAPIAdapter
+
+The most successful project in this space (680 stars). It makes Azure Neural TTS voices (Microsoft's cloud voices) available to any SAPI 5 app.
+
+**Architecture:**
+- C++ COM DLL implementing `ISpTTSEngine`
+- Connects to Azure Speech SDK (for local embedded voices) OR REST API (for cloud voices)
+- Builds SSML from SAPI `SPVTEXTFRAG` linked list
+- Handles: cancel, skip, sentence boundaries, bookmark events, silence compensation
+- Output format: `SPSF_24kHz16BitMono` (24kHz, 16-bit, mono)
+- Has an installer and a settings GUI window
+- Codebase: ~5000 lines of C++
+
+**Key findings from studying their code:**
+1. They use 24kHz 16-bit mono — same as Kokoro's native output. No resampling needed.
+2. The SSML building from `SPVTEXTFRAG` is non-trivial — handles rate, pitch, volume changes from SAPI.
+3. They handle cancellation (`SPVES_ABORT`) by checking `pOutputSite->GetActions()` in a loop.
+4. Audio is streamed chunk-by-chunk to `pOutputSite->Write()`.
+5. Silence compensation: when switching between sentences, they calculate trailing silence and compensate for network delay.
+6. Error handling: all C++ exceptions are caught at the COM boundary and converted to `HRESULT`.
+
+**Key limitation that creates our opportunity:**
+- Requires internet connection for cloud voices
+- Requires Azure subscription key ($) for non-Edge voices
+- Local embedded voices require Microsoft's limited-access SDK license
+- **VoiceLink fills this gap: same architecture, but local, free, with open-source models**
+
+### windows-text-to-speech (Lej77) — Rust Approach
+
+**Repo:** https://github.com/Lej77/windows-text-to-speech
+
+A Rust implementation supporting Piper TTS as a SAPI voice.
+
+**Key findings:**
+- Rust COM is viable using the `windows` crate, but complex
+- They catalogued all Kokoro Rust crates: `sherpa-rs`, `kokoros`/`kokorox`, `kokoro-tts`, `kokoroxide`, `kokoro-tiny`
+- Installation via `regsvr32 ./windows_tts_engine.dll`
+- Piper requires eSpeak NG data files — dependency management is messy
+- Has a comprehensive README with all the SAPI reference links we need:
+  - [TTS Engine Vendor Porting Guide (SAPI 5.3)](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ms717037(v=vs.85))
+  - [ISpTTSEngine Interface Reference](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ms717235(v=vs.85))
+  - [Sample Engines (SAPI 5.3)](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ms720179(v=vs.85))
+
+**Important note from their README:**
+> The modern `Windows.Media.SpeechSynthesis.SpeechSynthesizer` API has a remark:
+> "Only Microsoft-signed voices installed on the system can be used to generate speech."
+>
+> So the modern API is locked down. **SAPI 5 (legacy) is the only path for custom voices.**
+
+### PySpTTSEnginePoC (bostjanv) — Python Proof of Concept
+
+**Repo:** https://github.com/bostjanv/PySpTTSEnginePoC
+
+A minimal proof-of-concept showing you CAN implement SAPI TTS in Python.
+
+**How it works:**
+- Uses Python `comtypes` library to implement COM interfaces
+- Defines the SAPI interfaces in an IDL file (`pysapi.idl`), compiles with MIDL
+- Generates Python COM type definitions with `comtypes`
+- The "TTS" just plays a pre-recorded WAV file on every `Speak()` call
+- Registers the voice via Python (`winreg` module)
+- Only ~200 lines of Python
+
+**Key findings:**
+- It works, but runs as a COM **local server** (out-of-process), not in-process
+- Must run `python sapi_tts_engine.py /regserver` as admin to register
+- Python process must be running for the voice to work
+- Fragile: if Python crashes, the voice disappears silently
+- Good for learning, not for production
+
+**Their register_voice() function is a perfect reference** for the registry entries we need:
+```python
+paths = [
+    f"SOFTWARE\\Microsoft\\Speech\\Voices\\Tokens\\{id}",
+    f"SOFTWARE\\WOW6432Node\\Microsoft\\Speech\\Voices\\Tokens\\{id}"
+]
+# Must register in BOTH paths for 64-bit and 32-bit app compatibility
+```
+
+### Other Notable References
+
+- **eSpeak SAPI support:** The original eSpeak had SAPI 5 integration. eSpeak-ng (the modern fork) does NOT — [Issue #7](https://github.com/espeak-ng/espeak-ng/issues/7) has been open since 2015 with useful discussion.
+- **Microsoft Speech Platform:** A separate installable runtime (not built into Windows) that provides additional voices. Some are better than David/Zira. Not widely known.
+- **sherpa-onnx:** A C++/Rust/Python toolkit by k2-fsa that runs many TTS models (including Kokoro) via ONNX Runtime. Could be useful for a single-binary approach later.
 
 ---
 
-## 10. Glossary
+## 10. Architecture Decision
+
+### Date: 2026-02-28
+
+### Decision: Hybrid Architecture (C++ COM DLL + Python Inference Server)
+
+After studying all three existing projects and evaluating four possible approaches, we chose the **Hybrid** architecture.
+
+### Options Evaluated
+
+| Approach | Reliability | Speed | Ease of Dev | Model Flexibility | User Setup |
+|----------|-----------|-------|-------------|-------------------|------------|
+| **A. Pure Python (comtypes COM)** | Poor — fragile, crashes | Slow (out-of-process IPC) | Fast to build | Excellent | Complex (needs Python) |
+| **B. Pure C++ (single binary + ONNX)** | Excellent | Fastest | Very slow to build | Poor (recompile to change) | Simple (.dll) |
+| **C. Pure Rust** | Good | Fast | Slow (COM is complex in Rust) | Moderate | Simple (.dll) |
+| **D. Hybrid: C++ COM DLL + Python server** | Excellent | Fast (~2ms overhead) | Moderate | Excellent | Simple (installer bundles everything) |
+
+### Why Hybrid Wins
+
+**The bottleneck is ALWAYS the model inference (~100-500ms), never the COM layer (~0.1ms) or HTTP (~2ms).** So:
+
+1. **COM layer (C++) must be rock-solid** — it loads into every SAPI app's process. If it crashes, the app crashes. C++ in-process COM is the proven standard (NaturalVoiceSAPIAdapter proves this with 680 stars).
+
+2. **Inference layer (Python) must be flexible** — switching from Kokoro to Qwen-3 should be a config change, not a recompile. Python has the ML ecosystem. GPU management is trivial.
+
+3. **The HTTP/WebSocket bridge between them is negligible** — ~2ms localhost overhead vs 100ms+ inference. And it gives us clean separation: update the server without touching the COM DLL.
+
+### Latency Budget
+
+```
+COM call overhead:        ~0.1 ms
+HTTP request/response:    ~2 ms
+Kokoro inference (GPU):   ~100-300 ms  (for first chunk)
+Kokoro inference (CPU):   ~300-800 ms  (for first chunk)
+Streaming chunk overhead:  ~1 ms per chunk
+────────────────────────────────────
+Total time to first audio: ~102-802 ms
+Subsequent chunks:         ~10-50 ms each (pipeline effect)
+```
+
+For comparison: NaturalVoiceSAPIAdapter with Azure cloud has ~500-2000ms latency (network). We're faster.
+
+### The Architecture
+
+```
+                          IN-PROCESS (fast, reliable)          LOCALHOST (flexible)
+                         ┌──────────────────────────┐        ┌─────────────────────┐
+ Thorium Reader  ─SAPI─► │  voicelink.dll (C++)     │ ─HTTP─►│ Python server       │
+                         │                          │        │                     │
+                         │  • ISpTTSEngine          │◄─PCM──│  • Kokoro / Qwen-3  │
+                         │  • Parses SPVTEXTFRAG    │ stream │  • GPU/CPU auto     │
+                         │  • Streams to SAPI sink  │        │  • Model hot-swap   │
+                         │  • Cancel/skip handling  │        │  • Health endpoint  │
+                         └──────────────────────────┘        └─────────────────────┘
+                          Stable, rarely changes              Updated frequently
+                          ~1000 lines C++                     Python + FastAPI
+```
+
+### Communication Protocol
+
+```
+DLL → Server:  POST http://localhost:7860/v1/tts
+               Body: { "text": "...", "voice": "af_heart", "format": "pcm_24k_16bit" }
+               Response: streaming binary PCM audio (chunked transfer encoding)
+
+DLL → Server:  GET http://localhost:7860/v1/health
+               Response: { "status": "ok", "model": "kokoro", "gpu": true }
+
+DLL → Server:  GET http://localhost:7860/v1/voices
+               Response: [{ "id": "af_heart", "name": "Heart", "lang": "en-US", ... }]
+```
+
+---
+
+## 11. User Experience Design
+
+### Design Principle: A 10th-Grader Must Be Able to Set It Up
+
+No terminal. No Python. No registry editing. No `pip install`. Just a `.exe`.
+
+### Installation Flow
+
+```
+1. User downloads VoiceLink-Setup.exe from GitHub Releases (~150MB)
+   (Includes: COM DLL + embedded Python + Kokoro model + tray app)
+
+2. Double-click → Windows installer (NSIS or WiX)
+   ┌─────────────────────────────────────────┐
+   │  Welcome to VoiceLink Setup             │
+   │                                         │
+   │  VoiceLink adds AI-powered voices to    │
+   │  any Windows app that supports          │
+   │  text-to-speech.                        │
+   │                                         │
+   │  [Install]  [Advanced Options]          │
+   └─────────────────────────────────────────┘
+
+3. Installer does (behind the scenes):
+   a. Copies files to C:\Program Files\VoiceLink\
+   b. Extracts embedded Python runtime (not installed system-wide)
+   c. Registers voicelink.dll via regsvr32 (creates SAPI voice tokens)
+   d. Installs VoiceLink Server as a Windows Service
+   e. Creates system tray app shortcut in Startup
+   f. Downloads Kokoro model if not bundled (~82MB, with progress bar)
+
+4. Settings window opens automatically:
+   ┌─────────────────────────────────────────┐
+   │  VoiceLink Settings                     │
+   │                                         │
+   │  ✅ Server running (GPU: RTX 4060)      │
+   │                                         │
+   │  Voices:                                │
+   │  ☑ Kokoro - Heart (Female, warm)        │
+   │  ☑ Kokoro - Adam (Male, natural)        │
+   │  ☐ Kokoro - Bella (Female, clear)       │
+   │  ☐ Kokoro - Michael (Male, deep)        │
+   │                                         │
+   │  [▶ Test Voice]  [⚙ Advanced]           │
+   │                                         │
+   │  Models:                                │
+   │  ● Kokoro (82MB) — Installed ✓          │
+   │  ○ Qwen-3 TTS (2GB) — [Download]       │
+   │                                         │
+   │  [Save]  [Close to tray]                │
+   └─────────────────────────────────────────┘
+
+5. User opens Thorium Reader → Settings → Read Aloud → Voice:
+   Now sees "VoiceLink - Heart" alongside "Microsoft David"
+   Selects it → clicks Read Aloud → hears AI narration
+```
+
+### System Tray Behavior
+
+```
+🔗 (tray icon, green = running, red = error, yellow = loading)
+
+Right-click menu:
+  ├─ ✅ Server Running
+  ├─ ─────────────
+  ├─ Open Settings
+  ├─ Test Voice
+  ├─ ─────────────
+  ├─ Start Server
+  ├─ Stop Server
+  ├─ ─────────────
+  └─ Quit VoiceLink
+```
+
+### Fallback Behavior
+
+When things go wrong, VoiceLink should fail gracefully:
+
+| Scenario | Behavior |
+|----------|----------|
+| Server not running | DLL returns `SPERR_UNINITIALIZED`. SAPI falls back to next voice or shows error. |
+| Server overloaded | DLL has 5-second timeout. Returns empty audio rather than hanging. |
+| Model not downloaded | Server returns HTTP 503. DLL falls back gracefully. |
+| GPU not available | Server auto-falls back to CPU. Slower but works. |
+| VoiceLink uninstalled | Installer runs `regsvr32 /u`, removes registry entries. Clean. |
+
+### File Structure After Installation
+
+```
+C:\Program Files\VoiceLink\
+├── voicelink.dll              # COM DLL (registered via regsvr32)
+├── voicelink_tray.exe         # System tray app / settings GUI
+├── uninstall.exe              # Uninstaller
+├── python/                    # Embedded Python runtime (~15MB)
+│   ├── python.exe
+│   ├── python311.dll
+│   └── Lib/
+├── server/                    # Python inference server
+│   ├── server.py
+│   ├── config.yaml
+│   └── requirements frozen
+├── models/                    # TTS models (downloaded)
+│   ├── kokoro/
+│   │   ├── model.onnx (or .pt)
+│   │   └── voices/
+│   └── qwen3/ (optional)
+└── logs/
+    └── voicelink.log
+```
+
+### Technology Choices for UX Components
+
+| Component | Technology | Why |
+|-----------|-----------|-----|
+| Installer | **NSIS** (Nullsoft Scriptable Install System) | Free, lightweight, widely used (VLC, Notepad++ use it). Or **WiX** for MSI. |
+| Tray App | **C# WPF** or **Tauri** | WPF: native Windows, small binary. Tauri: web UI, cross-platform potential. |
+| Settings GUI | Part of tray app | Keeps it as one process. |
+| Server management | Windows Service + named pipe | Tray app monitors service health. |
+| Embedded Python | Python embeddable package | Official 15MB zip from python.org. No system-wide install needed. |
+
+---
+
+## 12. Glossary
 
 | Term | Definition |
 |------|-----------|
@@ -578,6 +861,17 @@ A separate installable runtime (not built into Windows) that provides additional
 | **HuggingFace Hub** | Repository for AI models. Where Kokoro downloads its weights from. |
 | **Voice embedding** | Small vector encoding a speaker's voice characteristics. |
 | **Zero-shot voice cloning** | Mimicking any voice from a short audio sample without fine-tuning. |
+| **comtypes** | Python library for COM interop. Can implement COM servers in Python. |
+| **regsvr32** | Windows utility to register/unregister COM DLLs. Calls `DllRegisterServer()`. |
+| **In-process server** | COM DLL loaded into the caller's process (fast). Registered under `InprocServer32`. |
+| **Local server** | COM EXE running as separate process (slower, IPC overhead). Registered under `LocalServer32`. |
+| **NSIS** | Nullsoft Scriptable Install System. Free installer builder (used by VLC, Notepad++). |
+| **Embedded Python** | Official Python distribution as a standalone zip (~15MB). No system install needed. |
+| **FastAPI** | Python web framework for building APIs. Supports async, WebSocket, streaming. |
+| **sherpa-onnx** | C++ toolkit for running TTS/STT models via ONNX Runtime. Supports Kokoro. |
+| **SPVTEXTFRAG** | SAPI struct — linked list of text fragments passed to `Speak()`. Contains text + SSML attributes. |
+| **SPVES_ABORT** | SAPI action flag. When set, the engine should stop speaking immediately. |
+| **ISpTTSEngineSite** | SAPI interface passed to `Speak()`. Used to write audio back (`Write()`) and check for cancel (`GetActions()`). |
 
 ---
 
