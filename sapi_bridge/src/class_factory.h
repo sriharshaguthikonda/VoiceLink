@@ -32,7 +32,8 @@
 // Global counters (defined in dllmain.cpp)
 extern LONG g_lockCount;
 
-class VoiceLinkClassFactory : public IClassFactory {
+class VoiceLinkClassFactory : public IClassFactory
+{
 public:
     VoiceLinkClassFactory();
     ~VoiceLinkClassFactory();
@@ -40,9 +41,11 @@ public:
     // -----------------------------------------------------------------------
     // IUnknown — Same as VoiceLinkEngine (every COM object needs these)
     // -----------------------------------------------------------------------
-    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override;
-    STDMETHODIMP_(ULONG) AddRef() override;
-    STDMETHODIMP_(ULONG) Release() override;
+    STDMETHODIMP QueryInterface(REFIID riid, void **ppv) override;
+    STDMETHODIMP_(ULONG)
+    AddRef() override;
+    STDMETHODIMP_(ULONG)
+    Release() override;
 
     // -----------------------------------------------------------------------
     // IClassFactory — The factory interface
@@ -56,7 +59,7 @@ public:
     //   ppv       — Output: pointer to the newly created object
     //
     // This is essentially: *ppv = new VoiceLinkEngine() with QI for riid.
-    STDMETHODIMP CreateInstance(IUnknown* pUnkOuter, REFIID riid, void** ppv) override;
+    STDMETHODIMP CreateInstance(IUnknown *pUnkOuter, REFIID riid, void **ppv) override;
 
     // Lock or unlock the DLL in memory.
     //

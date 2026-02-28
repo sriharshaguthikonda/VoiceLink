@@ -32,7 +32,7 @@
 // NOTE: We intentionally do NOT include <sphelper.h> here.
 // It contains GetVersionExW which is deprecated and triggers C4996.
 // We don't need any of its helpers — we use ISpObjectToken methods directly.
-#include <objbase.h>     // CoTaskMemAlloc
+#include <objbase.h> // CoTaskMemAlloc
 #include <string>
 #include <sstream>
 
@@ -41,11 +41,13 @@
 // ============================================================================
 
 VoiceLinkEngine::VoiceLinkEngine()
-    : m_refCount(1)          // Start with ref count of 1 (creator holds a reference)
-    , m_pToken(nullptr)
-    , m_voiceId("af_heart")  // Default voice if token doesn't specify
-    , m_serverPort(7860)     // Default port
-    , m_initialized(false)
+    : m_refCount(1) // Start with ref count of 1 (creator holds a reference)
+      ,
+      m_pToken(nullptr), m_voiceId("af_heart") // Default voice if token doesn't specify
+      ,
+      m_serverPort(7860) // Default port
+      ,
+      m_initialized(false)
 {
     // Track how many of our objects exist globally.
     // DllCanUnloadNow checks this — COM won't unload our DLL while objects exist.
@@ -53,11 +55,13 @@ VoiceLinkEngine::VoiceLinkEngine()
     VLOG(L"VoiceLinkEngine created (objects: %ld)", g_objectCount);
 }
 
-VoiceLinkEngine::~VoiceLinkEngine() {
+VoiceLinkEngine::~VoiceLinkEngine()
+{
     VLOG(L"VoiceLinkEngine destroying");
 
     // Release the voice token if we have one
-    if (m_pToken) {
+    if (m_pToken)
+    {
         m_pToken->Release();
         m_pToken = nullptr;
     }
@@ -73,7 +77,8 @@ VoiceLinkEngine::~VoiceLinkEngine() {
 // IUnknown Implementation
 // ============================================================================
 
-STDMETHODIMP VoiceLinkEngine::QueryInterface(REFIID riid, void** ppv) {
+STDMETHODIMP VoiceLinkEngine::QueryInterface(REFIID riid, void **ppv)
+{
     // QueryInterface is COM's version of dynamic_cast / instanceof.
     //
     // The caller asks: "Do you support interface X?"
@@ -86,18 +91,26 @@ STDMETHODIMP VoiceLinkEngine::QueryInterface(REFIID riid, void** ppv) {
     // For ISpObjectWithToken, the compiler adjusts the pointer automatically
     // via the static_cast. This is why we use static_cast, not reinterpret_cast.
 
-    if (!ppv) return E_POINTER;
+    if (!ppv)
+        return E_POINTER;
 
     *ppv = nullptr;
 
-    if (riid == IID_IUnknown) {
+    if (riid == IID_IUnknown)
+    {
         // Convention: return the "primary" interface for IUnknown
-        *ppv = static_cast<ISpTTSEngine*>(this);
-    } else if (riid == IID_ISpTTSEngine) {
-        *ppv = static_cast<ISpTTSEngine*>(this);
-    } else if (riid == IID_ISpObjectWithToken) {
-        *ppv = static_cast<ISpObjectWithToken*>(this);
-    } else {
+        *ppv = static_cast<ISpTTSEngine *>(this);
+    }
+    else if (riid == IID_ISpTTSEngine)
+    {
+        *ppv = static_cast<ISpTTSEngine *>(this);
+    }
+    else if (riid == IID_ISpObjectWithToken)
+    {
+        *ppv = static_cast<ISpObjectWithToken *>(this);
+    }
+    else
+    {
         return E_NOINTERFACE;
     }
 
@@ -105,14 +118,18 @@ STDMETHODIMP VoiceLinkEngine::QueryInterface(REFIID riid, void** ppv) {
     return S_OK;
 }
 
-STDMETHODIMP_(ULONG) VoiceLinkEngine::AddRef() {
+STDMETHODIMP_(ULONG)
+VoiceLinkEngine::AddRef()
+{
     // InterlockedIncrement is an atomic operation.
     // It's equivalent to "++m_refCount" but thread-safe.
     // We need this because multiple threads might AddRef/Release simultaneously.
     return InterlockedIncrement(&m_refCount);
 }
 
-STDMETHODIMP_(ULONG) VoiceLinkEngine::Release() {
+STDMETHODIMP_(ULONG)
+VoiceLinkEngine::Release()
+{
     // InterlockedDecrement atomically decrements and returns the new value.
     // If it hits 0, nobody holds a reference to us anymore → self-destruct.
     //
@@ -120,7 +137,8 @@ STDMETHODIMP_(ULONG) VoiceLinkEngine::Release() {
     // The caller doesn't "new" or "delete" us — they use AddRef/Release.
     // When the last Release() brings the count to 0, we clean up.
     LONG count = InterlockedDecrement(&m_refCount);
-    if (count == 0) {
+    if (count == 0)
+    {
         delete this;
     }
     return static_cast<ULONG>(count);
@@ -130,7 +148,8 @@ STDMETHODIMP_(ULONG) VoiceLinkEngine::Release() {
 // ISpObjectWithToken Implementation
 // ============================================================================
 
-STDMETHODIMP VoiceLinkEngine::SetObjectToken(ISpObjectToken* pToken) {
+STDMETHODIMP VoiceLinkEngine::SetObjectToken(ISpObjectToken *pToken)
+{
     // SAPI calls this right after creating us, passing in the voice token
     // that identifies which voice we should be.
     //
@@ -145,10 +164,12 @@ STDMETHODIMP VoiceLinkEngine::SetObjectToken(ISpObjectToken* pToken) {
 
     VLOG(L"SetObjectToken called");
 
-    if (!pToken) return E_INVALIDARG;
+    if (!pToken)
+        return E_INVALIDARG;
 
     // Release old token if we had one, then store and AddRef the new one
-    if (m_pToken) {
+    if (m_pToken)
+    {
         m_pToken->Release();
     }
     m_pToken = pToken;
@@ -160,16 +181,20 @@ STDMETHODIMP VoiceLinkEngine::SetObjectToken(ISpObjectToken* pToken) {
 
     // Voice ID (e.g., "af_heart", "am_adam")
     std::wstring voiceIdW = ReadTokenAttribute(L"VoiceLinkVoiceId");
-    if (!voiceIdW.empty()) {
+    if (!voiceIdW.empty())
+    {
         m_voiceId = WideToUtf8(voiceIdW.c_str());
         VLOG(L"Voice ID from token: %s", voiceIdW.c_str());
-    } else {
+    }
+    else
+    {
         VLOG(L"No VoiceLinkVoiceId in token, using default: af_heart");
     }
 
     // Server port (default: 7860)
     std::wstring portW = ReadTokenAttribute(L"VoiceLinkServerPort");
-    if (!portW.empty()) {
+    if (!portW.empty())
+    {
         m_serverPort = static_cast<INTERNET_PORT>(_wtoi(portW.c_str()));
         VLOG(L"Server port from token: %d", m_serverPort);
     }
@@ -178,7 +203,8 @@ STDMETHODIMP VoiceLinkEngine::SetObjectToken(ISpObjectToken* pToken) {
     // Initialize the HTTP client
     // -----------------------------------------------------------------------
     HRESULT hr = m_httpClient.Init(L"127.0.0.1", m_serverPort);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
         VERR(L"Failed to initialize HTTP client");
         return hr;
     }
@@ -188,15 +214,18 @@ STDMETHODIMP VoiceLinkEngine::SetObjectToken(ISpObjectToken* pToken) {
     return S_OK;
 }
 
-STDMETHODIMP VoiceLinkEngine::GetObjectToken(ISpObjectToken** ppToken) {
+STDMETHODIMP VoiceLinkEngine::GetObjectToken(ISpObjectToken **ppToken)
+{
     // SAPI occasionally asks us which token we're associated with.
     // Simple: return the token that was given to us in SetObjectToken.
 
-    if (!ppToken) return E_POINTER;
+    if (!ppToken)
+        return E_POINTER;
 
     *ppToken = m_pToken;
-    if (m_pToken) {
-        m_pToken->AddRef();  // Caller gets a reference, must Release() it
+    if (m_pToken)
+    {
+        m_pToken->AddRef(); // Caller gets a reference, must Release() it
     }
     return S_OK;
 }
@@ -206,11 +235,11 @@ STDMETHODIMP VoiceLinkEngine::GetObjectToken(ISpObjectToken** ppToken) {
 // ============================================================================
 
 STDMETHODIMP VoiceLinkEngine::GetOutputFormat(
-    const GUID* /*pTargetFmtId*/,
-    const WAVEFORMATEX* /*pTargetWaveFormatEx*/,
-    GUID* pDesiredFmtId,
-    WAVEFORMATEX** ppCoMemDesiredWaveFormatEx
-) {
+    const GUID * /*pTargetFmtId*/,
+    const WAVEFORMATEX * /*pTargetWaveFormatEx*/,
+    GUID *pDesiredFmtId,
+    WAVEFORMATEX **ppCoMemDesiredWaveFormatEx)
+{
     // SAPI calls this before Speak() to ask what audio format we'll produce.
     //
     // We ALWAYS produce: 24kHz, 16-bit, mono PCM
@@ -228,14 +257,15 @@ STDMETHODIMP VoiceLinkEngine::GetOutputFormat(
 
     VLOG(L"GetOutputFormat called");
 
-    if (!pDesiredFmtId || !ppCoMemDesiredWaveFormatEx) return E_POINTER;
+    if (!pDesiredFmtId || !ppCoMemDesiredWaveFormatEx)
+        return E_POINTER;
 
     // Allocate WAVEFORMATEX using COM's allocator
-    auto* pwfx = static_cast<WAVEFORMATEX*>(
-        CoTaskMemAlloc(sizeof(WAVEFORMATEX))
-    );
+    auto *pwfx = static_cast<WAVEFORMATEX *>(
+        CoTaskMemAlloc(sizeof(WAVEFORMATEX)));
 
-    if (!pwfx) return E_OUTOFMEMORY;
+    if (!pwfx)
+        return E_OUTOFMEMORY;
 
     // Fill in 24kHz, 16-bit, mono PCM format
     //
@@ -247,13 +277,13 @@ STDMETHODIMP VoiceLinkEngine::GetOutputFormat(
     //   nBlockAlign    = nChannels * wBitsPerSample / 8 = 2 bytes
     //   nAvgBytesPerSec = nSamplesPerSec * nBlockAlign = 48000 bytes/sec
     //   cbSize         = 0 (no extra data after this struct)
-    pwfx->wFormatTag      = WAVE_FORMAT_PCM;
-    pwfx->nChannels       = 1;
-    pwfx->nSamplesPerSec  = 24000;
-    pwfx->wBitsPerSample  = 16;
-    pwfx->nBlockAlign     = pwfx->nChannels * pwfx->wBitsPerSample / 8;  // 2
-    pwfx->nAvgBytesPerSec = pwfx->nSamplesPerSec * pwfx->nBlockAlign;    // 48000
-    pwfx->cbSize          = 0;
+    pwfx->wFormatTag = WAVE_FORMAT_PCM;
+    pwfx->nChannels = 1;
+    pwfx->nSamplesPerSec = 24000;
+    pwfx->wBitsPerSample = 16;
+    pwfx->nBlockAlign = pwfx->nChannels * pwfx->wBitsPerSample / 8;   // 2
+    pwfx->nAvgBytesPerSec = pwfx->nSamplesPerSec * pwfx->nBlockAlign; // 48000
+    pwfx->cbSize = 0;
 
     // Tell SAPI we're producing WAV format (PCM)
     *pDesiredFmtId = SPDFID_WaveFormatEx;
@@ -269,10 +299,10 @@ STDMETHODIMP VoiceLinkEngine::GetOutputFormat(
 STDMETHODIMP VoiceLinkEngine::Speak(
     DWORD /*dwSpeakFlags*/,
     REFGUID /*rguidFormatId*/,
-    const WAVEFORMATEX* /*pWaveFormatEx*/,
-    const SPVTEXTFRAG* pTextFragList,
-    ISpTTSEngineSite* pOutputSite
-) {
+    const WAVEFORMATEX * /*pWaveFormatEx*/,
+    const SPVTEXTFRAG *pTextFragList,
+    ISpTTSEngineSite *pOutputSite)
+{
     // -----------------------------------------------------------------------
     // This is where the magic happens. The entire purpose of VoiceLink
     // flows through this one method:
@@ -287,9 +317,11 @@ STDMETHODIMP VoiceLinkEngine::Speak(
 
     VLOG(L"Speak() called");
 
-    if (!pTextFragList || !pOutputSite) return E_INVALIDARG;
+    if (!pTextFragList || !pOutputSite)
+        return E_INVALIDARG;
 
-    if (!m_initialized || !m_httpClient.IsInitialized()) {
+    if (!m_initialized || !m_httpClient.IsInitialized())
+    {
         VERR(L"Speak() called but engine not initialized");
         return E_FAIL;
     }
@@ -311,7 +343,8 @@ STDMETHODIMP VoiceLinkEngine::Speak(
     // -----------------------------------------------------------------------
     std::string textUtf8 = ExtractText(pTextFragList);
 
-    if (textUtf8.empty()) {
+    if (textUtf8.empty())
+    {
         VLOG(L"No text to speak, returning S_OK");
         return S_OK;
     }
@@ -341,7 +374,8 @@ STDMETHODIMP VoiceLinkEngine::Speak(
         static_cast<DWORD>(jsonBody.size()),
 
         // onChunk: called for each chunk of PCM audio from the server
-        [&](const BYTE* data, DWORD size) -> HRESULT {
+        [&](const BYTE *data, DWORD size) -> HRESULT
+        {
             // Write audio data to SAPI's output site.
             //
             // ISpTTSEngineSite::Write() is like writing to a pipe:
@@ -354,7 +388,8 @@ STDMETHODIMP VoiceLinkEngine::Speak(
             ULONG written = 0;
             HRESULT writeHr = pOutputSite->Write(data, size, &written);
 
-            if (FAILED(writeHr)) {
+            if (FAILED(writeHr))
+            {
                 VERR(L"ISpTTSEngineSite::Write failed: 0x%08lX", writeHr);
                 return writeHr;
             }
@@ -364,7 +399,8 @@ STDMETHODIMP VoiceLinkEngine::Speak(
         },
 
         // checkAbort: called between chunks to see if we should stop
-        [&]() -> bool {
+        [&]() -> bool
+        {
             // GetActions() returns a bitmask of pending events.
             // SPVES_ABORT means "stop speaking NOW" — the user clicked stop,
             // navigated away, or the app is shutting down.
@@ -372,20 +408,25 @@ STDMETHODIMP VoiceLinkEngine::Speak(
             // We check this between chunks (every ~170ms of audio).
             // This gives responsive cancellation without checking too often.
             DWORD actions = pOutputSite->GetActions();
-            if (actions & SPVES_ABORT) {
+            if (actions & SPVES_ABORT)
+            {
                 VLOG(L"Abort requested by SAPI");
-                return true;  // Signal abort
+                return true; // Signal abort
             }
             return false;
-        }
-    );
+        });
 
-    if (hr == E_ABORT) {
+    if (hr == E_ABORT)
+    {
         VLOG(L"Speak() aborted after %lu bytes", totalBytesWritten);
-    } else if (FAILED(hr)) {
+    }
+    else if (FAILED(hr))
+    {
         VERR(L"Speak() failed: 0x%08lX (wrote %lu bytes before failure)",
              hr, totalBytesWritten);
-    } else {
+    }
+    else
+    {
         VLOG(L"Speak() completed: %lu bytes of audio streamed", totalBytesWritten);
     }
 
@@ -398,7 +439,8 @@ STDMETHODIMP VoiceLinkEngine::Speak(
 // Private Helpers
 // ============================================================================
 
-std::string VoiceLinkEngine::ExtractText(const SPVTEXTFRAG* pTextFragList) {
+std::string VoiceLinkEngine::ExtractText(const SPVTEXTFRAG *pTextFragList)
+{
     // Walk the linked list and concatenate all speakable text.
     //
     // SPVTEXTFRAG::State.eAction tells us what each fragment represents:
@@ -412,37 +454,42 @@ std::string VoiceLinkEngine::ExtractText(const SPVTEXTFRAG* pTextFragList) {
 
     std::wstring fullText;
 
-    for (const SPVTEXTFRAG* frag = pTextFragList; frag; frag = frag->pNext) {
-        if (!frag->pTextStart || frag->ulTextLen == 0) continue;
+    for (const SPVTEXTFRAG *frag = pTextFragList; frag; frag = frag->pNext)
+    {
+        if (!frag->pTextStart || frag->ulTextLen == 0)
+            continue;
 
-        switch (frag->State.eAction) {
-            case SPVA_Speak:
-                // Normal speech — just append the text
-                fullText.append(frag->pTextStart, frag->ulTextLen);
-                fullText += L' ';  // Space between fragments
-                break;
+        switch (frag->State.eAction)
+        {
+        case SPVA_Speak:
+            // Normal speech — just append the text
+            fullText.append(frag->pTextStart, frag->ulTextLen);
+            fullText += L' '; // Space between fragments
+            break;
 
-            case SPVA_SpellOut:
-                // Spell each character with pauses
-                // "cat" → "c. a. t."
-                for (ULONG i = 0; i < frag->ulTextLen; ++i) {
-                    fullText += frag->pTextStart[i];
-                    fullText += L". ";
-                }
-                break;
+        case SPVA_SpellOut:
+            // Spell each character with pauses
+            // "cat" → "c. a. t."
+            for (ULONG i = 0; i < frag->ulTextLen; ++i)
+            {
+                fullText += frag->pTextStart[i];
+                fullText += L". ";
+            }
+            break;
 
-            case SPVA_Silence:
-                // TODO: Could insert a "..." or send silence audio
-                break;
+        case SPVA_Silence:
+            // TODO: Could insert a "..." or send silence audio
+            break;
 
-            default:
-                // Skip bookmarks, pronunciations, etc.
-                break;
+        default:
+            // Skip bookmarks, pronunciations, etc.
+            break;
         }
     }
 
     // Trim trailing whitespace
-    while (!fullText.empty() && fullText.back() == L' ') {
+    while (!fullText.empty() && fullText.back() == L' ')
+    {
         fullText.pop_back();
     }
 
@@ -450,7 +497,8 @@ std::string VoiceLinkEngine::ExtractText(const SPVTEXTFRAG* pTextFragList) {
     return WideToUtf8(fullText.c_str(), static_cast<int>(fullText.size()));
 }
 
-std::wstring VoiceLinkEngine::ReadTokenAttribute(const wchar_t* attrName) {
+std::wstring VoiceLinkEngine::ReadTokenAttribute(const wchar_t *attrName)
+{
     // Read a custom attribute from our voice token in the registry.
     //
     // The token has an "Attributes" subkey with values like:
@@ -460,27 +508,31 @@ std::wstring VoiceLinkEngine::ReadTokenAttribute(const wchar_t* attrName) {
     // ISpObjectToken provides methods to read these without touching
     // the registry directly.
 
-    if (!m_pToken || !attrName) return {};
+    if (!m_pToken || !attrName)
+        return {};
 
     // SpGetSubTokenFromToken reads from the Attributes subkey
     // But for custom attributes at the token level, we use GetStringValue
     LPWSTR value = nullptr;
     HRESULT hr = m_pToken->GetStringValue(attrName, &value);
 
-    if (SUCCEEDED(hr) && value) {
+    if (SUCCEEDED(hr) && value)
+    {
         std::wstring result(value);
-        CoTaskMemFree(value);  // SAPI allocates with CoTaskMemAlloc
+        CoTaskMemFree(value); // SAPI allocates with CoTaskMemAlloc
         return result;
     }
 
     // Try the Attributes subkey
-    ISpDataKey* pAttrs = nullptr;
+    ISpDataKey *pAttrs = nullptr;
     hr = m_pToken->OpenKey(L"Attributes", &pAttrs);
-    if (SUCCEEDED(hr) && pAttrs) {
+    if (SUCCEEDED(hr) && pAttrs)
+    {
         hr = pAttrs->GetStringValue(attrName, &value);
         pAttrs->Release();
 
-        if (SUCCEEDED(hr) && value) {
+        if (SUCCEEDED(hr) && value)
+        {
             std::wstring result(value);
             CoTaskMemFree(value);
             return result;

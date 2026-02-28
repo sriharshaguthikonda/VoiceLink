@@ -30,11 +30,13 @@
 // TtsHttpClient Implementation
 // ============================================================================
 
-TtsHttpClient::~TtsHttpClient() {
+TtsHttpClient::~TtsHttpClient()
+{
     Close();
 }
 
-HRESULT TtsHttpClient::Init(const wchar_t* host, INTERNET_PORT port) {
+HRESULT TtsHttpClient::Init(const wchar_t *host, INTERNET_PORT port)
+{
     // Clean up any previous session
     Close();
 
@@ -52,14 +54,15 @@ HRESULT TtsHttpClient::Init(const wchar_t* host, INTERNET_PORT port) {
     // For localhost this doesn't matter, but it's good practice.
     // -----------------------------------------------------------------------
     m_hSession = WinHttpOpen(
-        L"VoiceLink/1.0",                     // User agent
-        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,   // Proxy setting
-        WINHTTP_NO_PROXY_NAME,                 // Proxy name (auto)
-        WINHTTP_NO_PROXY_BYPASS,               // Proxy bypass (auto)
-        0                                      // Flags (synchronous mode)
+        L"VoiceLink/1.0",                    // User agent
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, // Proxy setting
+        WINHTTP_NO_PROXY_NAME,               // Proxy name (auto)
+        WINHTTP_NO_PROXY_BYPASS,             // Proxy bypass (auto)
+        0                                    // Flags (synchronous mode)
     );
 
-    if (!m_hSession) {
+    if (!m_hSession)
+    {
         VERR(L"WinHttpOpen failed: %lu", GetLastError());
         return E_FAIL;
     }
@@ -74,13 +77,14 @@ HRESULT TtsHttpClient::Init(const wchar_t* host, INTERNET_PORT port) {
     // For VoiceLink, this is always localhost:7860.
     // -----------------------------------------------------------------------
     m_hConnect = WinHttpConnect(
-        m_hSession,     // Session handle
-        host,           // Server name (L"127.0.0.1")
-        port,           // Port (7860)
-        0               // Reserved
+        m_hSession, // Session handle
+        host,       // Server name (L"127.0.0.1")
+        port,       // Port (7860)
+        0           // Reserved
     );
 
-    if (!m_hConnect) {
+    if (!m_hConnect)
+    {
         VERR(L"WinHttpConnect failed: %lu", GetLastError());
         Close();
         return E_FAIL;
@@ -90,24 +94,28 @@ HRESULT TtsHttpClient::Init(const wchar_t* host, INTERNET_PORT port) {
     return S_OK;
 }
 
-void TtsHttpClient::Close() {
-    if (m_hConnect) {
+void TtsHttpClient::Close()
+{
+    if (m_hConnect)
+    {
         WinHttpCloseHandle(m_hConnect);
         m_hConnect = nullptr;
     }
-    if (m_hSession) {
+    if (m_hSession)
+    {
         WinHttpCloseHandle(m_hSession);
         m_hSession = nullptr;
     }
 }
 
 HRESULT TtsHttpClient::StreamSynthesize(
-    const char* jsonBody,
+    const char *jsonBody,
     DWORD jsonBodyLen,
-    const std::function<HRESULT(const BYTE* data, DWORD size)>& onChunk,
-    const std::function<bool()>& checkAbort
-) {
-    if (!m_hConnect) {
+    const std::function<HRESULT(const BYTE *data, DWORD size)> &onChunk,
+    const std::function<bool()> &checkAbort)
+{
+    if (!m_hConnect)
+    {
         VERR(L"StreamSynthesize called but client not initialized");
         return E_FAIL;
     }
@@ -122,16 +130,17 @@ HRESULT TtsHttpClient::StreamSynthesize(
     // the machine, so encryption would be wasted CPU cycles.
     // -----------------------------------------------------------------------
     HINTERNET hRequest = WinHttpOpenRequest(
-        m_hConnect,                 // Connection handle
-        L"POST",                    // HTTP method
-        L"/v1/tts",                 // URL path
-        nullptr,                    // HTTP version (nullptr = HTTP/1.1)
-        WINHTTP_NO_REFERER,         // Referrer (none)
+        m_hConnect,                   // Connection handle
+        L"POST",                      // HTTP method
+        L"/v1/tts",                   // URL path
+        nullptr,                      // HTTP version (nullptr = HTTP/1.1)
+        WINHTTP_NO_REFERER,           // Referrer (none)
         WINHTTP_DEFAULT_ACCEPT_TYPES, // Accept types (*/*)
-        0                           // Flags (no HTTPS)
+        0                             // Flags (no HTTPS)
     );
 
-    if (!hRequest) {
+    if (!hRequest)
+    {
         VERR(L"WinHttpOpenRequest failed: %lu", GetLastError());
         return E_FAIL;
     }
@@ -142,15 +151,15 @@ HRESULT TtsHttpClient::StreamSynthesize(
     // Content-Type tells the server we're sending JSON.
     // The server uses this to parse the request body correctly.
     // -----------------------------------------------------------------------
-    const wchar_t* headers = L"Content-Type: application/json\r\n";
+    const wchar_t *headers = L"Content-Type: application/json\r\n";
     BOOL headerOk = WinHttpAddRequestHeaders(
         hRequest,
         headers,
         static_cast<DWORD>(wcslen(headers)),
-        WINHTTP_ADDREQ_FLAG_ADD
-    );
+        WINHTTP_ADDREQ_FLAG_ADD);
 
-    if (!headerOk) {
+    if (!headerOk)
+    {
         VERR(L"WinHttpAddRequestHeaders failed: %lu", GetLastError());
         WinHttpCloseHandle(hRequest);
         return E_FAIL;
@@ -171,13 +180,14 @@ HRESULT TtsHttpClient::StreamSynthesize(
     // -----------------------------------------------------------------------
     BOOL sendOk = WinHttpSendRequest(
         hRequest,
-        WINHTTP_NO_ADDITIONAL_HEADERS, 0,       // Additional headers (none)
-        const_cast<char*>(jsonBody), jsonBodyLen, // Request body
-        jsonBodyLen,                              // Total body length
-        0                                        // Context (unused)
+        WINHTTP_NO_ADDITIONAL_HEADERS, 0,          // Additional headers (none)
+        const_cast<char *>(jsonBody), jsonBodyLen, // Request body
+        jsonBodyLen,                               // Total body length
+        0                                          // Context (unused)
     );
 
-    if (!sendOk) {
+    if (!sendOk)
+    {
         DWORD err = GetLastError();
         VERR(L"WinHttpSendRequest failed: %lu (is the server running?)", err);
         WinHttpCloseHandle(hRequest);
@@ -196,7 +206,8 @@ HRESULT TtsHttpClient::StreamSynthesize(
     // -----------------------------------------------------------------------
     BOOL recvOk = WinHttpReceiveResponse(hRequest, nullptr);
 
-    if (!recvOk) {
+    if (!recvOk)
+    {
         VERR(L"WinHttpReceiveResponse failed: %lu", GetLastError());
         WinHttpCloseHandle(hRequest);
         return E_FAIL;
@@ -219,17 +230,18 @@ HRESULT TtsHttpClient::StreamSynthesize(
         WINHTTP_HEADER_NAME_BY_INDEX,
         &statusCode,
         &statusSize,
-        WINHTTP_NO_HEADER_INDEX
-    );
+        WINHTTP_NO_HEADER_INDEX);
 
-    if (statusCode != 200) {
+    if (statusCode != 200)
+    {
         VERR(L"Server returned HTTP %lu", statusCode);
 
         // Try to read the error body for debugging
         char errBuf[512] = {};
         DWORD errRead = 0;
         WinHttpReadData(hRequest, errBuf, sizeof(errBuf) - 1, &errRead);
-        if (errRead > 0) {
+        if (errRead > 0)
+        {
             errBuf[errRead] = '\0';
             VLOG(L"Server error body: %hs", errBuf);
         }
@@ -255,9 +267,11 @@ HRESULT TtsHttpClient::StreamSynthesize(
     BYTE buffer[CHUNK_BUF_SIZE];
     HRESULT result = S_OK;
 
-    for (;;) {
+    for (;;)
+    {
         // Check if the caller wants us to abort
-        if (checkAbort && checkAbort()) {
+        if (checkAbort && checkAbort())
+        {
             VLOG(L"Synthesis aborted by caller");
             result = E_ABORT;
             break;
@@ -273,23 +287,25 @@ HRESULT TtsHttpClient::StreamSynthesize(
             hRequest,
             buffer,
             CHUNK_BUF_SIZE,
-            &bytesRead
-        );
+            &bytesRead);
 
-        if (!readOk) {
+        if (!readOk)
+        {
             VERR(L"WinHttpReadData failed: %lu", GetLastError());
             result = E_FAIL;
             break;
         }
 
         // 0 bytes = server finished sending audio
-        if (bytesRead == 0) {
+        if (bytesRead == 0)
+        {
             break;
         }
 
         // Pass this chunk to SAPI (via the callback)
         HRESULT chunkResult = onChunk(buffer, bytesRead);
-        if (FAILED(chunkResult)) {
+        if (FAILED(chunkResult))
+        {
             VERR(L"onChunk callback failed: 0x%08lX", chunkResult);
             result = chunkResult;
             break;
@@ -311,7 +327,8 @@ HRESULT TtsHttpClient::StreamSynthesize(
 // JSON Helpers
 // ============================================================================
 
-std::string JsonEscapeUtf8(const std::string& input) {
+std::string JsonEscapeUtf8(const std::string &input)
+{
     // JSON string escaping rules (RFC 8259, Section 7):
     //   - Quotation mark (") → \"
     //   - Reverse solidus (\) → \\
@@ -324,36 +341,56 @@ std::string JsonEscapeUtf8(const std::string& input) {
     //   - Any character < U+0020 → \uXXXX
 
     std::string result;
-    result.reserve(input.size() + input.size() / 8);  // Pre-allocate ~12% extra
+    result.reserve(input.size() + input.size() / 8); // Pre-allocate ~12% extra
 
-    for (unsigned char ch : input) {
-        switch (ch) {
-            case '"':  result += "\\\""; break;
-            case '\\': result += "\\\\"; break;
-            case '\b': result += "\\b";  break;
-            case '\f': result += "\\f";  break;
-            case '\n': result += "\\n";  break;
-            case '\r': result += "\\r";  break;
-            case '\t': result += "\\t";  break;
-            default:
-                if (ch < 0x20) {
-                    // Control character → \u00XX
-                    char hex[8];
-                    snprintf(hex, sizeof(hex), "\\u%04x", ch);
-                    result += hex;
-                } else {
-                    result += static_cast<char>(ch);
-                }
-                break;
+    for (unsigned char ch : input)
+    {
+        switch (ch)
+        {
+        case '"':
+            result += "\\\"";
+            break;
+        case '\\':
+            result += "\\\\";
+            break;
+        case '\b':
+            result += "\\b";
+            break;
+        case '\f':
+            result += "\\f";
+            break;
+        case '\n':
+            result += "\\n";
+            break;
+        case '\r':
+            result += "\\r";
+            break;
+        case '\t':
+            result += "\\t";
+            break;
+        default:
+            if (ch < 0x20)
+            {
+                // Control character → \u00XX
+                char hex[8];
+                snprintf(hex, sizeof(hex), "\\u%04x", ch);
+                result += hex;
+            }
+            else
+            {
+                result += static_cast<char>(ch);
+            }
+            break;
         }
     }
 
     return result;
 }
 
-std::string BuildTtsRequestJson(const std::string& text,
-                                const std::string& voiceId,
-                                float speed) {
+std::string BuildTtsRequestJson(const std::string &text,
+                                const std::string &voiceId,
+                                float speed)
+{
     // Build JSON by hand. This is simple enough that a library would be
     // overkill, and we avoid adding any dependencies.
     //
@@ -373,7 +410,8 @@ std::string BuildTtsRequestJson(const std::string& text,
 // Encoding Helpers
 // ============================================================================
 
-std::string WideToUtf8(const wchar_t* wide, int len) {
+std::string WideToUtf8(const wchar_t *wide, int len)
+{
     // Windows uses UTF-16 (2 bytes per most characters, 4 bytes for rare ones).
     // Our HTTP server expects UTF-8 (1-4 bytes per character, ASCII-compatible).
     //
@@ -385,23 +423,25 @@ std::string WideToUtf8(const wchar_t* wide, int len) {
     // This two-call pattern is common in Windows APIs that return
     // variable-length data.
 
-    if (!wide || (len == 0)) {
+    if (!wide || (len == 0))
+    {
         return {};
     }
 
     // First call: get required buffer size
     int needed = WideCharToMultiByte(
-        CP_UTF8,    // Target encoding
-        0,          // Flags (0 for UTF-8)
-        wide,       // Source wide string
-        len,        // Source length (-1 if null-terminated)
-        nullptr,    // Output buffer (nullptr = just tell me the size)
-        0,          // Output buffer size
-        nullptr,    // Default character (must be nullptr for UTF-8)
-        nullptr     // Used default character flag (must be nullptr for UTF-8)
+        CP_UTF8, // Target encoding
+        0,       // Flags (0 for UTF-8)
+        wide,    // Source wide string
+        len,     // Source length (-1 if null-terminated)
+        nullptr, // Output buffer (nullptr = just tell me the size)
+        0,       // Output buffer size
+        nullptr, // Default character (must be nullptr for UTF-8)
+        nullptr  // Used default character flag (must be nullptr for UTF-8)
     );
 
-    if (needed <= 0) {
+    if (needed <= 0)
+    {
         return {};
     }
 
@@ -411,11 +451,11 @@ std::string WideToUtf8(const wchar_t* wide, int len) {
         CP_UTF8, 0,
         wide, len,
         result.data(), needed,
-        nullptr, nullptr
-    );
+        nullptr, nullptr);
 
     // If len was -1, the result includes a null terminator — trim it
-    if (len == -1 && !result.empty() && result.back() == '\0') {
+    if (len == -1 && !result.empty() && result.back() == '\0')
+    {
         result.pop_back();
     }
 

@@ -33,22 +33,24 @@
 #ifndef VOICELINK_NO_LOG
 
 // General info log
-#define VLOG(fmt, ...)                                                         \
-    do {                                                                       \
-        wchar_t _vl_buf[1024];                                                 \
-        _snwprintf_s(_vl_buf, _countof(_vl_buf), _TRUNCATE,                    \
-                     VOICELINK_LOG_PREFIX fmt L"\n", ##__VA_ARGS__);            \
-        OutputDebugStringW(_vl_buf);                                           \
+#define VLOG(fmt, ...)                                               \
+    do                                                               \
+    {                                                                \
+        wchar_t _vl_buf[1024];                                       \
+        _snwprintf_s(_vl_buf, _countof(_vl_buf), _TRUNCATE,          \
+                     VOICELINK_LOG_PREFIX fmt L"\n", ##__VA_ARGS__); \
+        OutputDebugStringW(_vl_buf);                                 \
     } while (0)
 
 // Error log (same output, different prefix for easy grep)
-#define VERR(fmt, ...)                                                         \
-    do {                                                                       \
-        wchar_t _vl_buf[1024];                                                 \
-        _snwprintf_s(_vl_buf, _countof(_vl_buf), _TRUNCATE,                    \
-                     VOICELINK_LOG_PREFIX L"ERROR: " fmt L"\n",                \
-                     ##__VA_ARGS__);                                            \
-        OutputDebugStringW(_vl_buf);                                           \
+#define VERR(fmt, ...)                                          \
+    do                                                          \
+    {                                                           \
+        wchar_t _vl_buf[1024];                                  \
+        _snwprintf_s(_vl_buf, _countof(_vl_buf), _TRUNCATE,     \
+                     VOICELINK_LOG_PREFIX L"ERROR: " fmt L"\n", \
+                     ##__VA_ARGS__);                            \
+        OutputDebugStringW(_vl_buf);                            \
     } while (0)
 
 #else
@@ -57,4 +59,4 @@
 #define VLOG(fmt, ...) ((void)0)
 #define VERR(fmt, ...) ((void)0)
 
-#endif  // VOICELINK_NO_LOG
+#endif // VOICELINK_NO_LOG

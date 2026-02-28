@@ -157,20 +157,22 @@
 
 ### 2.1 — COM DLL Skeleton
 - [x] Choose language: C++ *(decided after evaluating all 4 approaches — see DEEP_DIVE.md Section 10)*
-- [ ] Implement `IUnknown` and `IClassFactory`
-- [ ] Implement `DllRegisterServer` / `DllUnregisterServer`
-- [ ] Test: DLL registers and shows up in voice list
+- [x] Implement `IUnknown` and `IClassFactory`
+- [x] Implement `DllRegisterServer` / `DllUnregisterServer`
+  - Registers in both `Speech\Voices\Tokens` (classic SAPI) and `Speech_OneCore\Voices\Tokens` (Thorium/Electron/UWP)
+- [x] Test: DLL registers and shows up in voice list — 11 voices visible
 
 ### 2.2 — SAPI Engine Implementation
-- [ ] Implement `ISpTTSEngine::Speak()`
-- [ ] Implement `ISpTTSEngine::GetOutputFormat()`
-- [ ] Implement `ISpObjectWithToken::SetObjectToken()`
-- [ ] Forward text to inference server via HTTP/WebSocket
-- [ ] Stream audio back via `ISpTTSEngineSite::Write()`
+- [x] Implement `ISpTTSEngine::Speak()`
+- [x] Implement `ISpTTSEngine::GetOutputFormat()` — 24kHz 16-bit mono PCM
+- [x] Implement `ISpObjectWithToken::SetObjectToken()` — reads VoiceLinkVoiceId from registry
+- [x] Forward text to inference server via HTTP chunked transfer (WinHTTP)
+- [x] Stream audio back via `ISpTTSEngineSite::Write()` — 8KB chunks (~170ms audio)
+- [ ] Handle SAPI rate/volume controls *(playback rate doesn't work yet)*
 
 ### 2.3 — Integration Testing
-- [ ] Test with PowerShell `Add-Type -TypeDefinition` SAPI test
-- [ ] Test with Thorium Reader
+- [x] Test with PowerShell SAPI — end-to-end speech confirmed (2.5x realtime)
+- [x] Test with Thorium Reader — voices visible and speaking after OneCore registry fix
 - [ ] Test with Edge Read Aloud
 - [ ] Test with Windows Narrator
 - [ ] Test with Balabolka
@@ -246,8 +248,10 @@
 | 2026-02-28 | UX: Single .exe installer | A 10th-grader should be able to set it up — no terminal, no Python |
 | 2026-02-28 | Server port: 7860 | Avoids common conflicts, easy to remember |
 | 2026-02-28 | Audio format: 24kHz 16-bit mono | Matches both Kokoro output and SAPI SPSF_24kHz16BitMono — no resampling |
+| 2026-02-28 | Dual registry registration | Must register in both Speech and Speech_OneCore for Thorium/Electron apps |
+| 2026-02-28 | Phase 2 complete | COM DLL working end-to-end in PowerShell and Thorium Reader |
 | | | |
 
 ---
 
-*Last updated: 2026-02-28 (Phase 0 complete, Phase 1 server running)*
+*Last updated: 2026-02-28 (Phase 0-2 complete, voices working in Thorium Reader)*

@@ -59,7 +59,8 @@
 // Global counters (defined in dllmain.cpp)
 extern LONG g_objectCount;
 
-class VoiceLinkEngine : public ISpTTSEngine, public ISpObjectWithToken {
+class VoiceLinkEngine : public ISpTTSEngine, public ISpObjectWithToken
+{
 public:
     VoiceLinkEngine();
     ~VoiceLinkEngine();
@@ -73,15 +74,17 @@ public:
 
     // "Do you support interface X?" Returns S_OK + pointer if yes.
     // This is how COM does runtime type checking (like dynamic_cast).
-    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override;
+    STDMETHODIMP QueryInterface(REFIID riid, void **ppv) override;
 
     // "I need a reference to you." Increments the reference count.
     // Thread-safe via InterlockedIncrement.
-    STDMETHODIMP_(ULONG) AddRef() override;
+    STDMETHODIMP_(ULONG)
+    AddRef() override;
 
     // "I'm done with you." Decrements the reference count.
     // When it hits 0, the object deletes itself.
-    STDMETHODIMP_(ULONG) Release() override;
+    STDMETHODIMP_(ULONG)
+    Release() override;
 
     // -----------------------------------------------------------------------
     // ISpTTSEngine — The actual TTS engine interface
@@ -106,10 +109,9 @@ public:
     STDMETHODIMP Speak(
         DWORD dwSpeakFlags,
         REFGUID rguidFormatId,
-        const WAVEFORMATEX* pWaveFormatEx,
-        const SPVTEXTFRAG* pTextFragList,
-        ISpTTSEngineSite* pOutputSite
-    ) override;
+        const WAVEFORMATEX *pWaveFormatEx,
+        const SPVTEXTFRAG *pTextFragList,
+        ISpTTSEngineSite *pOutputSite) override;
 
     // Tell SAPI what audio format we produce.
     //
@@ -120,11 +122,10 @@ public:
     // We must allocate the WAVEFORMATEX with CoTaskMemAlloc because
     // SAPI will free it with CoTaskMemFree.
     STDMETHODIMP GetOutputFormat(
-        const GUID* pTargetFmtId,
-        const WAVEFORMATEX* pTargetWaveFormatEx,
-        GUID* pDesiredFmtId,
-        WAVEFORMATEX** ppCoMemDesiredWaveFormatEx
-    ) override;
+        const GUID *pTargetFmtId,
+        const WAVEFORMATEX *pTargetWaveFormatEx,
+        GUID *pDesiredFmtId,
+        WAVEFORMATEX **ppCoMemDesiredWaveFormatEx) override;
 
     // -----------------------------------------------------------------------
     // ISpObjectWithToken — Links this engine to its registry token
@@ -138,10 +139,10 @@ public:
     // We read custom attributes from the token:
     //   - VoiceLinkVoiceId: "af_heart", "am_adam", etc.
     //   - VoiceLinkServerPort: "7860" (optional, defaults to 7860)
-    STDMETHODIMP SetObjectToken(ISpObjectToken* pToken) override;
+    STDMETHODIMP SetObjectToken(ISpObjectToken *pToken) override;
 
     // SAPI asks which token we're associated with.
-    STDMETHODIMP GetObjectToken(ISpObjectToken** ppToken) override;
+    STDMETHODIMP GetObjectToken(ISpObjectToken **ppToken) override;
 
 private:
     // -----------------------------------------------------------------------
@@ -150,19 +151,19 @@ private:
 
     // Walk the SPVTEXTFRAG linked list and extract all speakable text.
     // Handles SPVA_Speak fragments, skips bookmarks/silence/etc.
-    std::string ExtractText(const SPVTEXTFRAG* pTextFragList);
+    std::string ExtractText(const SPVTEXTFRAG *pTextFragList);
 
     // Read a string attribute from our voice token's registry entry.
-    std::wstring ReadTokenAttribute(const wchar_t* attrName);
+    std::wstring ReadTokenAttribute(const wchar_t *attrName);
 
     // -----------------------------------------------------------------------
     // Member Variables
     // -----------------------------------------------------------------------
 
-    LONG m_refCount;                // COM reference count (InterlockedIncrement/Decrement)
-    ISpObjectToken* m_pToken;       // Our voice token (AddRef'd, released in destructor)
-    TtsHttpClient m_httpClient;     // HTTP connection to the inference server
-    std::string m_voiceId;          // Voice ID from token ("af_heart", "am_adam", etc.)
-    INTERNET_PORT m_serverPort;     // Server port from token (default: 7860)
-    bool m_initialized;             // Have we been fully set up via SetObjectToken?
+    LONG m_refCount;            // COM reference count (InterlockedIncrement/Decrement)
+    ISpObjectToken *m_pToken;   // Our voice token (AddRef'd, released in destructor)
+    TtsHttpClient m_httpClient; // HTTP connection to the inference server
+    std::string m_voiceId;      // Voice ID from token ("af_heart", "am_adam", etc.)
+    INTERNET_PORT m_serverPort; // Server port from token (default: 7860)
+    bool m_initialized;         // Have we been fully set up via SetObjectToken?
 };

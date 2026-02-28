@@ -57,14 +57,15 @@ typedef LPVOID HINTERNET;
 //   are safe as long as they don't share request handles.
 // ============================================================================
 
-class TtsHttpClient {
+class TtsHttpClient
+{
 public:
     TtsHttpClient() = default;
     ~TtsHttpClient();
 
     // Non-copyable (WinHTTP handles are not reference-counted)
-    TtsHttpClient(const TtsHttpClient&) = delete;
-    TtsHttpClient& operator=(const TtsHttpClient&) = delete;
+    TtsHttpClient(const TtsHttpClient &) = delete;
+    TtsHttpClient &operator=(const TtsHttpClient &) = delete;
 
     // -----------------------------------------------------------------------
     // Init — Create the WinHTTP session and connect to the server
@@ -75,7 +76,7 @@ public:
     //
     // Returns S_OK on success, E_FAIL on error.
     // -----------------------------------------------------------------------
-    HRESULT Init(const wchar_t* host, INTERNET_PORT port);
+    HRESULT Init(const wchar_t *host, INTERNET_PORT port);
 
     // -----------------------------------------------------------------------
     // Close — Release all WinHTTP handles
@@ -105,11 +106,10 @@ public:
     //   ~100ms of sending the request.
     // -----------------------------------------------------------------------
     HRESULT StreamSynthesize(
-        const char* jsonBody,
+        const char *jsonBody,
         DWORD jsonBodyLen,
-        const std::function<HRESULT(const BYTE* data, DWORD size)>& onChunk,
-        const std::function<bool()>& checkAbort
-    );
+        const std::function<HRESULT(const BYTE *data, DWORD size)> &onChunk,
+        const std::function<bool()> &checkAbort);
 
     // -----------------------------------------------------------------------
     // IsInitialized — Check if Init() has been called successfully
@@ -117,8 +117,8 @@ public:
     bool IsInitialized() const { return m_hConnect != nullptr; }
 
 private:
-    HINTERNET m_hSession = nullptr;    // WinHTTP session (like a browser instance)
-    HINTERNET m_hConnect = nullptr;    // Connection to localhost:7860
+    HINTERNET m_hSession = nullptr; // WinHTTP session (like a browser instance)
+    HINTERNET m_hConnect = nullptr; // Connection to localhost:7860
     std::wstring m_host;
     INTERNET_PORT m_port = 0;
 };
@@ -142,11 +142,11 @@ private:
 
 // Escape a UTF-8 string for safe inclusion in a JSON string value.
 // The result does NOT include the surrounding quotes.
-std::string JsonEscapeUtf8(const std::string& input);
+std::string JsonEscapeUtf8(const std::string &input);
 
 // Build the complete JSON body for a TTS request.
-std::string BuildTtsRequestJson(const std::string& text,
-                                const std::string& voiceId,
+std::string BuildTtsRequestJson(const std::string &text,
+                                const std::string &voiceId,
                                 float speed);
 
 // ============================================================================
@@ -155,4 +155,4 @@ std::string BuildTtsRequestJson(const std::string& text,
 
 // Convert a wide string (UTF-16, what Windows/SAPI uses) to UTF-8
 // (what our HTTP server expects).
-std::string WideToUtf8(const wchar_t* wide, int len = -1);
+std::string WideToUtf8(const wchar_t *wide, int len = -1);

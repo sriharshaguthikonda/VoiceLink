@@ -23,7 +23,8 @@ VoiceLinkClassFactory::VoiceLinkClassFactory()
     VLOG(L"VoiceLinkClassFactory created");
 }
 
-VoiceLinkClassFactory::~VoiceLinkClassFactory() {
+VoiceLinkClassFactory::~VoiceLinkClassFactory()
+{
     VLOG(L"VoiceLinkClassFactory destroyed");
 }
 
@@ -31,13 +32,16 @@ VoiceLinkClassFactory::~VoiceLinkClassFactory() {
 // IUnknown Implementation
 // ============================================================================
 
-STDMETHODIMP VoiceLinkClassFactory::QueryInterface(REFIID riid, void** ppv) {
-    if (!ppv) return E_POINTER;
+STDMETHODIMP VoiceLinkClassFactory::QueryInterface(REFIID riid, void **ppv)
+{
+    if (!ppv)
+        return E_POINTER;
     *ppv = nullptr;
 
     // We support IUnknown and IClassFactory
-    if (riid == IID_IUnknown || riid == IID_IClassFactory) {
-        *ppv = static_cast<IClassFactory*>(this);
+    if (riid == IID_IUnknown || riid == IID_IClassFactory)
+    {
+        *ppv = static_cast<IClassFactory *>(this);
         AddRef();
         return S_OK;
     }
@@ -45,13 +49,18 @@ STDMETHODIMP VoiceLinkClassFactory::QueryInterface(REFIID riid, void** ppv) {
     return E_NOINTERFACE;
 }
 
-STDMETHODIMP_(ULONG) VoiceLinkClassFactory::AddRef() {
+STDMETHODIMP_(ULONG)
+VoiceLinkClassFactory::AddRef()
+{
     return InterlockedIncrement(&m_refCount);
 }
 
-STDMETHODIMP_(ULONG) VoiceLinkClassFactory::Release() {
+STDMETHODIMP_(ULONG)
+VoiceLinkClassFactory::Release()
+{
     LONG count = InterlockedDecrement(&m_refCount);
-    if (count == 0) {
+    if (count == 0)
+    {
         delete this;
     }
     return static_cast<ULONG>(count);
@@ -62,24 +71,27 @@ STDMETHODIMP_(ULONG) VoiceLinkClassFactory::Release() {
 // ============================================================================
 
 STDMETHODIMP VoiceLinkClassFactory::CreateInstance(
-    IUnknown* pUnkOuter,
+    IUnknown *pUnkOuter,
     REFIID riid,
-    void** ppv
-) {
+    void **ppv)
+{
     // COM aggregation is an advanced feature where one object can appear
     // to be part of another object. We don't support it.
     // If pUnkOuter is non-null, the caller is trying to aggregate us.
-    if (pUnkOuter != nullptr) {
+    if (pUnkOuter != nullptr)
+    {
         return CLASS_E_NOAGGREGATION;
     }
 
-    if (!ppv) return E_POINTER;
+    if (!ppv)
+        return E_POINTER;
     *ppv = nullptr;
 
     // Create the engine object
     // The constructor sets ref count to 1
-    auto* engine = new (std::nothrow) VoiceLinkEngine();
-    if (!engine) {
+    auto *engine = new (std::nothrow) VoiceLinkEngine();
+    if (!engine)
+    {
         VERR(L"Failed to allocate VoiceLinkEngine");
         return E_OUTOFMEMORY;
     }
@@ -93,22 +105,29 @@ STDMETHODIMP VoiceLinkClassFactory::CreateInstance(
     // (ref count goes from 1 to 0).
     engine->Release();
 
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
         VERR(L"VoiceLinkEngine doesn't support requested interface");
-    } else {
+    }
+    else
+    {
         VLOG(L"VoiceLinkEngine instance created successfully");
     }
 
     return hr;
 }
 
-STDMETHODIMP VoiceLinkClassFactory::LockServer(BOOL fLock) {
+STDMETHODIMP VoiceLinkClassFactory::LockServer(BOOL fLock)
+{
     // LockServer prevents COM from unloading our DLL.
     // Some apps lock the server to keep the DLL loaded for fast
     // subsequent object creation.
-    if (fLock) {
+    if (fLock)
+    {
         InterlockedIncrement(&g_lockCount);
-    } else {
+    }
+    else
+    {
         InterlockedDecrement(&g_lockCount);
     }
     return S_OK;
