@@ -1,0 +1,25 @@
+# ============================================================================
+# VoiceLink Inference Server — Dependencies
+# ============================================================================
+#
+# Install with:  pip install -r server/requirements.txt
+#
+# NOTE: 'kokoro' must be installed separately first (it pins numpy==1.26.4)
+#       pip install kokoro soundfile
+#       pip install -r server/requirements.txt
+# ============================================================================
+
+# --- Web Framework ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0       # ASGI server with hot-reload
+
+# --- Configuration ---
+pydantic-settings>=2.7.0        # Settings from env vars / .env files
+pyyaml>=6.0                     # YAML config parsing
+
+# --- Audio ---
+soundfile>=0.13.0               # WAV/PCM I/O (already installed with kokoro)
+numpy>=1.26.0,<2.0              # Array operations (pinned by kokoro)
+
+# --- Utilities ---
+loguru>=0.7.0                   # Better logging with colors + rotation

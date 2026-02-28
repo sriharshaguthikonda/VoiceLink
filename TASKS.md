@@ -10,35 +10,40 @@
 ### 0.1 — Understand Windows SAPI (Speech API)
 > *What is SAPI? How does Windows discover and use voices? What interfaces must we implement?*
 
-- [ ] **Research: What is SAPI 5?**
+- [x] **Research: What is SAPI 5?**
   - Read Microsoft SAPI 5.4 documentation
   - Understand the difference between SAPI 4, SAPI 5, and OneCore voices
   - Document: How does an app like Thorium Reader find available voices?
   - Learning: Registry keys involved (`HKLM\SOFTWARE\Microsoft\Speech\Voices\Tokens\`)
+  - ✅ Documented in DEEP_DIVE.md Section 2
 
-- [ ] **Research: The ISpTTSEngine Interface**
+- [x] **Research: The ISpTTSEngine Interface**
   - What methods must a TTS engine implement?
   - `Speak()`, `GetOutputFormat()`, `SetObjectToken()` — what does each do?
   - How does SAPI pass text to the engine? (plain text vs SSML)
   - How does the engine return audio? (`ISpTTSEngineSite::Write()`)
+  - ✅ Documented in DEEP_DIVE.md Section 2
 
-- [ ] **Research: COM (Component Object Model) Fundamentals**
+- [x] **Research: COM (Component Object Model) Fundamentals**
   - What is COM? Why does Windows use it for plugins?
   - IUnknown, IClassFactory, reference counting
   - GUIDs, CLSIDs, ProgIDs — what are they?
   - How does DllRegisterServer work?
   - How does `CoCreateInstance` find and load our DLL?
+  - ✅ Documented in DEEP_DIVE.md Section 3
 
-- [ ] **Research: Audio Formats in SAPI**
+- [x] **Research: Audio Formats in SAPI**
   - What audio formats does SAPI expect? (PCM, sample rates)
   - What is `WAVEFORMATEX`?
   - How does streaming work — can we send audio in chunks?
   - Latency requirements — how fast must first audio arrive?
+  - ✅ Documented in DEEP_DIVE.md Section 7
 
-- [ ] **Experiment: List all SAPI voices on my system**
+- [x] **Experiment: List all SAPI voices on my system**
   - Write a small Python/PowerShell script using `win32com` or `pyttsx3`
   - List all installed voices, their properties, registry entries
   - Try speaking with each voice, observe the API calls
+  - ✅ Script: `research/01_explore_sapi.ps1`. Found David, Zira, 7 OneCore voices.
 
 - [ ] **Experiment: Inspect Thorium Reader's TTS usage**
   - How does Thorium call SAPI? (Electron + SAPI bridge?)
@@ -49,13 +54,14 @@
 ### 0.2 — Understand Neural TTS Models
 > *How do modern TTS models work? What are our options? What are the tradeoffs?*
 
-- [ ] **Research: How Neural TTS Works (High Level)**
+- [x] **Research: How Neural TTS Works (High Level)**
   - Text → Tokens → Mel Spectrogram → Waveform
   - What is a vocoder? (HiFi-GAN, etc.)
   - Difference between autoregressive and non-autoregressive models
   - What determines voice quality vs speed?
+  - ✅ Documented in DEEP_DIVE.md Section 4
 
-- [ ] **Survey: Open-Source TTS Models**
+- [x] **Survey: Open-Source TTS Models**
   - Evaluate each on: quality, speed, license, ease of use, voice cloning
   - **Kokoro** — Small, fast, Apache 2.0, multiple voices
   - **Piper** — Optimized for Raspberry Pi, very fast, many languages
@@ -63,56 +69,56 @@
   - **Coqui/XTTS** — Voice cloning capable
   - **F5-TTS** — Zero-shot voice cloning
   - **Parler-TTS** — Describe the voice you want in natural language
-  - Document comparison table with benchmarks
+  - ✅ Documented in DEEP_DIVE.md Section 5 & 6
 
-- [ ] **Experiment: Run Kokoro locally**
+- [x] **Experiment: Run Kokoro locally**
   - Install dependencies, download model
   - Generate speech from text, measure latency and quality
   - Test streaming output — can we get audio chunk by chunk?
+  - ✅ Script: `research/02_kokoro_test.py`. 4 voices tested, quality verified.
 
-- [ ] **Experiment: Run Piper locally**
-  - Same as above
-  - Compare quality and speed to Kokoro
+- [ ] **Experiment: Run Piper locally** *(Skipped — user tested Piper previously, prefers Kokoro)*
 
-- [ ] **Research: ONNX Runtime for TTS**
-  - What is ONNX? Why use it?
-  - Can we convert models to ONNX for faster CPU inference?
-  - DirectML vs CUDA vs CPU backends on Windows
+- [ ] **Research: ONNX Runtime for TTS** *(Future — Kokoro PyTorch works well for now)*
 
 ### 0.3 — Understand the Audio Pipeline
 > *How does audio flow from a TTS model to the user's speakers through SAPI?*
 
-- [ ] **Research: PCM Audio Basics**
+- [x] **Research: PCM Audio Basics**
   - Sample rate, bit depth, channels
   - How to calculate buffer sizes
   - WAV file format structure
+  - ✅ Documented in DEEP_DIVE.md Section 7
 
-- [ ] **Research: Audio Streaming**
+- [x] **Research: Audio Streaming**
   - Chunked audio delivery vs full buffer
   - Ring buffers and double buffering
   - Latency vs quality tradeoffs
+  - ✅ Implemented in server — chunked transfer encoding via StreamingResponse
 
-- [ ] **Research: SAPI Audio Sink**
+- [x] **Research: SAPI Audio Sink**
   - How does `ISpTTSEngineSite::Write()` work?
   - Can we send partial audio? How often?
   - What happens if audio arrives too slowly?
+  - ✅ Documented in DEEP_DIVE.md Section 2
 
 ### 0.4 — Study Existing Projects
 > *Who has done something similar? What can we learn from them?*
 
-- [ ] **Study: sapi-tts-bridge (if exists)**
-  - Search GitHub for SAPI TTS bridge projects
-  - Read their code, understand their approach
-  - What problems did they encounter?
+- [x] **Study: NaturalVoiceSAPIAdapter (680★, C++)**
+  - Bridges Azure Neural voices → SAPI via COM DLL
+  - Key learnings: SPVTEXTFRAG→SSML building, cancel handling, 24kHz PCM streaming
+  - ✅ Documented in DEEP_DIVE.md Section 9
 
-- [ ] **Study: piper-windows-sapi**
-  - There may be a Piper SAPI integration — find and study it
-  - How did they register the COM component?
-  - What shortcuts did they take?
+- [x] **Study: windows-text-to-speech (Rust)**
+  - SAPI engine in Rust with Piper support
+  - Confirmed: modern SpeechSynthesizer API is locked to MS-signed voices
+  - ✅ Documented in DEEP_DIVE.md Section 9
 
-- [ ] **Study: Other SAPI COM examples**
-  - Microsoft SDK samples for TTS engines
-  - Any C++ SAPI engine tutorials
+- [x] **Study: PySpTTSEnginePoC (Python)**
+  - Pure Python COM TTS engine using comtypes
+  - Good for learning, too fragile for production (out-of-process, crashy)
+  - ✅ Documented in DEEP_DIVE.md Section 9
 
 ---
 
@@ -120,27 +126,27 @@
 **Goal:** Build a local server that takes text and returns high-quality streaming audio.
 
 ### 1.1 — Server Foundation
-- [ ] Set up Python project with FastAPI
-- [ ] Define API contract (`POST /tts` with text, voice, format params)
-- [ ] WebSocket endpoint for streaming audio
-- [ ] Health check endpoint
-- [ ] Configuration system (model selection, GPU/CPU, port)
+- [x] Set up Python project with FastAPI
+- [x] Define API contract (`POST /v1/tts` with text, voice, format params)
+- [ ] WebSocket endpoint for streaming audio *(deferred — HTTP streaming works well)*
+- [x] Health check endpoint (`GET /v1/health`)
+- [x] Configuration system (model selection, GPU/CPU, port) — `server/config.py`
 
 ### 1.2 — Model Integration
-- [ ] Integrate Kokoro as first model
-- [ ] Abstract model interface (so we can swap models)
+- [x] Integrate Kokoro as first model — `server/models/kokoro_model.py`
+- [x] Abstract model interface (so we can swap models) — `server/models/base.py`
 - [ ] Integrate Piper as second model
 - [ ] Model download and management system
 
 ### 1.3 — Streaming and Performance
-- [ ] Implement chunked audio streaming
+- [x] Implement chunked audio streaming — StreamingResponse + chunked transfer
 - [ ] Benchmark: time to first byte, total latency, throughput
-- [ ] GPU vs CPU performance comparison
+- [ ] GPU vs CPU performance comparison *(GPU not active yet — CUDA mismatch)*
 - [ ] Memory profiling and optimization
 
 ### 1.4 — Testing
 - [ ] Unit tests for API contract
-- [ ] Integration tests with actual models
+- [x] Integration tests with actual models — `research/03_test_server.py`
 - [ ] Stress tests (concurrent requests)
 - [ ] Audio quality validation
 
@@ -150,7 +156,7 @@
 **Goal:** Build a Windows COM DLL that registers as a SAPI voice and proxies to our server.
 
 ### 2.1 — COM DLL Skeleton
-- [ ] Choose language: C++ vs Rust (research tradeoffs)
+- [x] Choose language: C++ *(decided after evaluating all 4 approaches — see DEEP_DIVE.md Section 10)*
 - [ ] Implement `IUnknown` and `IClassFactory`
 - [ ] Implement `DllRegisterServer` / `DllUnregisterServer`
 - [ ] Test: DLL registers and shows up in voice list
@@ -235,8 +241,13 @@
 | 2026-02-28 | Project started | Thorium Reader TTS quality is terrible, neural TTS exists but can't be used |
 | 2026-02-28 | Name: VoiceLink | Clean, memorable, describes the bridge concept |
 | 2026-02-28 | Learning-first approach | Understanding every layer matters more than shipping fast |
+| 2026-02-28 | Skipped Piper | User tested Piper previously, prefers Kokoro quality |
+| 2026-02-28 | Architecture: Hybrid C++ COM + Python server | Best balance of reliability (C++ COM) and flexibility (Python ML) |
+| 2026-02-28 | UX: Single .exe installer | A 10th-grader should be able to set it up — no terminal, no Python |
+| 2026-02-28 | Server port: 7860 | Avoids common conflicts, easy to remember |
+| 2026-02-28 | Audio format: 24kHz 16-bit mono | Matches both Kokoro output and SAPI SPSF_24kHz16BitMono — no resampling |
 | | | |
 
 ---
 
-*Last updated: 2026-02-28*
+*Last updated: 2026-02-28 (Phase 0 complete, Phase 1 server running)*

@@ -88,7 +88,8 @@ if (Test-Path $oneCorePath) {
         Write-Host "    CLSID:        $($props.CLSID)"
         Write-Host ""
     }
-} else {
+}
+else {
     Write-Host "  No OneCore voices path found.`n"
 }
 
