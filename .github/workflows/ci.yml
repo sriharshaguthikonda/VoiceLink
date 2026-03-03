@@ -1,0 +1,63 @@
+# ============================================================================
+# VoiceLink — Continuous Integration
+# ============================================================================
+# Runs on every push and pull request to main.
+# Builds the SAPI COM DLL and the Tauri GUI to catch compile errors early.
+# Does NOT produce a release — see release.yml for that.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---- SAPI Bridge (C++ COM DLL) ----
+      - name: Configure SAPI Bridge (CMake)
+        run: cmake -B sapi_bridge/build -S sapi_bridge -G "Visual Studio 17 2022" -A x64
+
+      - name: Build SAPI Bridge
+        run: cmake --build sapi_bridge/build --config Release
+
+      # ---- Tauri GUI (Node.js + Rust) ----
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui/src-tauri
+
+      - name: Install frontend dependencies
+        working-directory: gui
+        run: npm ci
+
+      - name: Build Tauri app
+        working-directory: gui
+        run: npm run tauri build
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceLink-installer
+          path: gui/src-tauri/target/release/bundle/nsis/*.exe
+          retention-days: 7
