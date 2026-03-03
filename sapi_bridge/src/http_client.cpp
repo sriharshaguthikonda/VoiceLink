@@ -39,11 +39,11 @@
 // This makes VoiceLink gracefully degrade: the app just hears nothing
 // instead of getting an error dialog or crashing.
 // ============================================================================
-static constexpr int    MAX_RETRIES         = 3;      // Total attempts
-static constexpr DWORD  RETRY_DELAY_MS      = 500;    // Wait between retries
-static constexpr DWORD  CONNECT_TIMEOUT_MS  = 2000;   // TCP connect timeout
-static constexpr DWORD  SEND_TIMEOUT_MS     = 5000;   // Time to send request
-static constexpr DWORD  RECEIVE_TIMEOUT_MS  = 30000;  // Time waiting for response headers
+static constexpr int MAX_RETRIES = 3;              // Total attempts
+static constexpr DWORD RETRY_DELAY_MS = 500;       // Wait between retries
+static constexpr DWORD CONNECT_TIMEOUT_MS = 2000;  // TCP connect timeout
+static constexpr DWORD SEND_TIMEOUT_MS = 5000;     // Time to send request
+static constexpr DWORD RECEIVE_TIMEOUT_MS = 30000; // Time waiting for response headers
 
 // ============================================================================
 // TtsHttpClient Implementation
@@ -173,7 +173,7 @@ HRESULT TtsHttpClient::StreamSynthesize(
         }
 
         lastHr = StreamSynthesizeOnce(jsonBody, jsonBodyLen, onChunk,
-                                       checkAbort, pTotalAudioBytes);
+                                      checkAbort, pTotalAudioBytes);
 
         // Success or user abort: stop retrying
         if (SUCCEEDED(lastHr) || lastHr == E_ABORT)

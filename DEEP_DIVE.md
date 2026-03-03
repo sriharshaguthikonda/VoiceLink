@@ -2,7 +2,7 @@
 
 > A living document. This is our knowledge base — everything we learn about TTS, COM, audio, companies, models, and system internals goes here. Not a README. A reference manual built through exploration.
 
-**Last updated:** 2026-03-02 (v4 — added installer architecture, setup wizard, deployment lessons)
+**Last updated:** 2026-03-03 (v5 — Qwen3-TTS deep research, integration plan, model comparison)
 
 ---
 
@@ -22,6 +22,7 @@
 - [12. Glossary](#12-glossary)
 - [13. Management GUI (Tauri v2)](#13-management-gui-tauri-v2)
 - [14. Installer & Deployment](#14-installer--deployment)
+- [15. Qwen3-TTS Integration Plan](#15-qwen3-tts-integration-plan)
 
 ---
 
@@ -285,34 +286,90 @@ This is why Kokoro can have many voices with one ~82MB model — each voice is j
 
 ---
 
-### Qwen-3 TTS (by Alibaba / Qwen Team)
+### Qwen3-TTS (by Alibaba / Qwen Team) — Researched 2026-03-03
 
 | Property | Details |
 |----------|---------|
 | **Creator** | Alibaba Cloud / Qwen Team |
-| **Architecture** | Large language model based TTS (decoder-only transformer) |
-| **Model sizes** | Expected: 0.5B, 2B, 7B parameters |
-| **Languages** | Multilingual (Chinese, English, Japanese, Korean, and many more) |
-| **Sample rate** | Likely 24,000 Hz |
-| **License** | TBD — Qwen models are typically Apache 2.0 or Qwen License |
-| **HuggingFace** | Qwen/ namespace |
-| **Speed** | Slower than Kokoro — LLM-based, benefits heavily from GPU |
-| **Voice cloning** | Expected: zero-shot voice cloning from audio prompt |
-| **Quality** | Expected: state-of-the-art, near indistinguishable from human |
+| **Released** | January 22, 2026 |
+| **Architecture** | Discrete multi-codebook language model with Dual-Track hybrid streaming |
+| **Tokenizer** | Qwen3-TTS-Tokenizer-12Hz (12.5 Hz, 16-layer multi-codebook, causal ConvNet) |
+| **Model sizes** | 0.6B parameters (~1.2 GB) and 1.7B parameters (~3.4 GB) |
+| **Languages** | 10: Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian |
+| **Sample rate** | Not explicitly stated, likely 24,000 Hz |
+| **License** | Apache 2.0 |
+| **GitHub** | https://github.com/QwenLM/Qwen3-TTS |
+| **HuggingFace** | Qwen/Qwen3-TTS-12Hz-* namespace |
+| **Python package** | `pip install qwen-tts` |
+| **Speed** | 97ms first-packet latency (streaming), needs GPU |
+| **Voice cloning** | Yes — 3 second audio clip + transcript |
+| **Voice design** | Yes (1.7B only) — describe a voice in natural language |
+| **Quality** | State-of-the-art, emotion/prosody-aware, instruction-controllable |
+| **VRAM needed** | ~2 GB (0.6B with FlashAttn), ~5-6 GB (1.7B with FlashAttn) |
+| **Requires** | NVIDIA GPU with CUDA, FlashAttention 2 recommended, Python 3.12 |
 
-**Why Qwen-3 TTS is exciting:**
-- It's LLM-based — the TTS model IS a large language model that outputs audio tokens
-- This means it understands context, emphasis, emotion much better than traditional TTS
-- It can potentially handle things like: dialogue (different character voices), questions (rising intonation), sarcasm, excitement
-- Zero-shot voice cloning: give it a 10-second audio sample, and it speaks in that voice
+**Released model variants:**
+
+| Model | Params | Download | Capabilities | Streaming |
+|-------|--------|----------|-------------|----------|
+| Tokenizer-12Hz | small | ~few 100 MB | Encode/decode audio to tokens. Required by all models. | — |
+| 0.6B-CustomVoice | 0.6B | ~1.2 GB | 9 built-in speakers; no instruction control | Yes |
+| 0.6B-Base | 0.6B | ~1.2 GB | Voice cloning from 3s audio; fine-tuning base | Yes |
+| 1.7B-CustomVoice | ~2B | ~3.4 GB | 9 built-in speakers + instruction-based emotion/tone control | Yes |
+| 1.7B-VoiceDesign | ~2B | ~3.4 GB | Create new voices from text descriptions | Yes |
+| 1.7B-Base | ~2B | ~3.4 GB | Voice cloning + fine-tuning base | Yes |
+
+**Built-in speakers (9 total, available in all CustomVoice models):**
+
+| Speaker | Description | Native Language |
+|---------|-------------|----------------|
+| Vivian | Bright, slightly edgy young female | Chinese |
+| Serena | Warm, gentle young female | Chinese |
+| Uncle_Fu | Seasoned male, low mellow timbre | Chinese |
+| Dylan | Youthful Beijing male, clear natural timbre | Chinese (Beijing) |
+| Eric | Lively Chengdu male, slightly husky brightness | Chinese (Sichuan) |
+| **Ryan** | Dynamic male, strong rhythmic drive | **English** |
+| **Aiden** | Sunny American male, clear midrange | **English** |
+| Ono_Anna | Playful Japanese female, light nimble timbre | Japanese |
+| Sohee | Warm Korean female, rich emotion | Korean |
+
+Only 2 English speakers (both male). All speakers can speak all 10 languages, but quality is best in their native one.
+
+**Key technical features we verified:**
+- End-to-end multi-codebook LM architecture (no DiT, no cascading errors from separate stages)
+- Dual-Track streaming: first audio packet after 1 character input, 97ms latency
+- Instruction-driven control: pass `instruct="Very happy"` or `instruct="Speak angrily"` to shape delivery
+- Voice cloning needs only 3 seconds of reference audio + transcript
+- Voice design creates voices from descriptions like "Male, 17 years old, tenor range, gaining confidence"
+- Reusable clone prompts: compute voice embeddings once, reuse across many generations
+- Fine-tuning supported on the Base models
+
+**Quality difference between 0.6B and 1.7B:**
+- Both have the same 9 speakers and voice cloning capability
+- 1.7B adds Voice Design (create voices from text descriptions)
+- 1.7B supports the `instruct` parameter for emotion/tone control on CustomVoice
+- 1.7B has better prosody and handles edge cases more naturally (3x the parameters)
+- 0.6B is "use the fixed voices and clone" — 1.7B is "also design and control"
 
 **Tradeoffs vs Kokoro:**
-- Much larger (GBs vs 82MB)
-- Slower inference (needs good GPU)
-- Higher quality, especially for expressive/emotional speech
-- More VRAM needed (4-16GB depending on model size)
 
-**Our plan:** Use as "Premium" voice option for users with strong GPUs.
+| | Kokoro | Qwen3-TTS (0.6B) | Qwen3-TTS (1.7B) |
+|---|---|---|---|
+| Model size | ~82 MB (ONNX) | ~1.2 GB | ~3.4 GB |
+| Tokenizer | Misaki (included) | Tokenizer-12Hz (~few 100 MB extra) | Same |
+| GPU required | No (CPU is fine) | Yes (CUDA) | Yes (CUDA) |
+| VRAM | 0 (CPU) / ~1 GB (GPU) | ~2 GB | ~5-6 GB |
+| English voices | 11 (6F, 5M) | 2 (both male) | 2 (both male) |
+| Voice cloning | No | Yes (3s clip) | Yes (3s clip) |
+| Voice design | No | No | Yes |
+| Emotion control | No | No | Yes (via instruct) |
+| Streaming | Yes (chunked) | Yes (97ms latency) | Yes (97ms latency) |
+| Speed on GPU | ~50x realtime | Slower (LLM-based) | Slower (LLM-based) |
+| Speed on CPU | ~5-15x realtime | Not practical | Not practical |
+| Languages | 10 | 10 | 10 |
+| License | Apache 2.0 | Apache 2.0 | Apache 2.0 |
+
+**Our plan:** Optional feature, gated behind CUDA GPU detection. The Qwen3 option is not shown at all if no compatible GPU exists. Adds voice cloning and voice design to VoiceLink without replacing Kokoro as the default engine. See [Section 15](#15-qwen3-tts-integration-plan) for full integration design.
 
 ---
 
@@ -394,9 +451,10 @@ This is why Kokoro can have many voices with one ~82MB model — each voice is j
 
 - **What:** AI research division of Alibaba Cloud (Chinese tech giant)
 - **Based in:** Hangzhou, China
-- **Created:** Qwen series of LLMs (Qwen, Qwen-2, Qwen-2.5, Qwen-3), Qwen-Audio, Qwen-TTS
-- **Why they matter:** Qwen-3 TTS represents the next generation — LLM-native TTS. If they release it open-source (likely, given their track record), it could be the best open TTS model.
-- **License history:** Qwen-1 was restrictive, Qwen-2+ moved to Apache 2.0. Good trend.
+- **Created:** Qwen series of LLMs (Qwen, Qwen-2, Qwen-2.5, Qwen-3), Qwen-Audio, **Qwen3-TTS** (released Jan 2026)
+- **Why they matter:** Qwen3-TTS is now released and confirmed Apache 2.0. It's the second TTS engine we're integrating into VoiceLink for voice cloning and voice design.
+- **License:** Apache 2.0 (confirmed for all Qwen3-TTS models)
+- **GitHub:** https://github.com/QwenLM/Qwen3-TTS (8.9k stars, very active)
 
 ### Rhasspy / Michael Hansen
 
@@ -1108,3 +1166,164 @@ C:\ProgramData\VoiceLink\          (~1.3 GB total)
 ```
 
 The data directory is **preserved across uninstall/reinstall** so users don't re-download 1.3 GB on upgrades. Only `C:\Program Files\VoiceLink\` is removed by the uninstaller.
+
+---
+
+## 15. Qwen3-TTS Integration Plan
+
+> Decided 2026-03-03 after researching Qwen3-TTS in depth. This section captures the full design for adding Qwen3-TTS as an optional feature alongside Kokoro.
+
+### Design Principles
+
+1. **Kokoro is the default.** It works on any machine (CPU or GPU), has 11 English voices, and is already proven.
+2. **Qwen3 is optional functionality.** It adds voice cloning and voice design. Not "advanced mode" — just more features.
+3. **GPU gated, not toggle-gated.** If no CUDA GPU is detected, the Qwen3 option does not appear in settings at all. No toggle to flip back, no error message — just not shown.
+4. **Separate download.** Qwen3 models are not part of the initial setup wizard. The user explicitly opts in and downloads them from within the app.
+5. **Lazy loaded.** Qwen3 model loads into VRAM only when a Qwen3 voice is actually selected for speech. Unloads after idle timeout to free the GPU.
+
+### GPU Detection
+
+Before showing any Qwen3 UI, the backend must verify:
+
+```
+1. NVIDIA GPU present (check nvidia-smi or pynvml)
+2. CUDA available (torch.cuda.is_available())
+3. Enough VRAM (>= 2 GB free for 0.6B, >= 5 GB free for 1.7B)
+```
+
+If any check fails, the Qwen3 section is hidden from the UI entirely. The check runs at app startup and is cached.
+
+### Model Tier Selection
+
+When the user enables Qwen3, they pick a tier:
+
+| Tier | Models Downloaded | Total Size | Capabilities | Min VRAM |
+|------|------------------|-----------|-------------|----------|
+| **Standard** (0.6B) | Tokenizer-12Hz + 0.6B-CustomVoice + 0.6B-Base | ~1.5 GB | 9 built-in voices + voice cloning | ~2 GB |
+| **Full** (1.7B) | Tokenizer-12Hz + 1.7B-CustomVoice + 1.7B-VoiceDesign + 1.7B-Base | ~10 GB | Everything above + voice design + emotion control | ~5-6 GB |
+
+Default recommendation based on detected VRAM.
+
+### UI Changes
+
+**Settings page:**
+- New "Qwen3 TTS" section (only visible if CUDA GPU detected)
+- Toggle to enable/disable Qwen3
+- Model tier selector (Standard / Full)
+- Download progress bar (shows during initial model download)
+- Status indicator: "Not installed" / "Downloading..." / "Ready" / "Disabled"
+
+**New "Voice Studio" nav section (only visible when Qwen3 is enabled and downloaded):**
+- **Clone a Voice** tab: Upload or record 3s audio clip + transcript → preview → save to library
+- **Design a Voice** tab (1.7B only): Type a description → generate → preview → save to library
+- **Qwen3 Voices** tab: The 9 built-in Qwen3 speakers, enable/disable for SAPI
+
+**Voice Manager:**
+- Shows all voices unified: Kokoro voices + Qwen3 built-in voices + user-created Qwen3 voices
+- Each voice has a source badge: `Kokoro`, `Qwen3`, `Qwen3 (Cloned)`, `Qwen3 (Designed)`
+- Enable/disable, rename — works the same regardless of source
+
+### Server Architecture
+
+Extend the existing FastAPI server rather than running a second process:
+
+```
+/v1/tts                ← Kokoro (existing, unchanged)
+/v1/qwen3/tts          ← Qwen3 synthesis for registered voices
+/v1/qwen3/clone        ← Voice Studio: create a cloned voice
+/v1/qwen3/design       ← Voice Studio: create a designed voice
+/v1/qwen3/speakers     ← List built-in Qwen3 speakers
+```
+
+One server, one port, one process to manage, one watchdog.
+
+**Lazy loading strategy:**
+- Qwen3 model loads on first `/v1/qwen3/*` request
+- Idle timeout: unload after 5 minutes of no Qwen3 requests
+- This keeps Kokoro always fast and GPU memory free when Qwen3 isn't in use
+
+### COM DLL Routing
+
+The COM DLL already reads voice tokens from the registry. For Qwen3 voices, we add a `Model` registry field:
+
+```
+HKLM\SOFTWARE\Microsoft\Speech\Voices\Tokens\VoiceLink_af_heart
+    CLSID   = {our-clsid}
+    Model   = kokoro          ← hits /v1/tts (or absent for backward compat)
+
+HKLM\SOFTWARE\Microsoft\Speech\Voices\Tokens\VoiceLink_Qwen3_Ryan
+    CLSID   = {our-clsid}
+    Model   = qwen3            ← hits /v1/qwen3/tts
+    Speaker = Ryan
+
+HKLM\SOFTWARE\Microsoft\Speech\Voices\Tokens\VoiceLink_MyClonedVoice
+    CLSID   = {our-clsid}
+    Model   = qwen3            ← hits /v1/qwen3/tts
+    VoiceProfile = my_narrator ← points to saved clone profile
+```
+
+The DLL reads `Model` and routes to the correct endpoint. If `Model` is missing or `kokoro`, use `/v1/tts`. If `qwen3`, use `/v1/qwen3/tts`.
+
+### Voice Profile Storage
+
+User-created voices (cloned or designed) are saved as self-contained folders:
+
+```
+C:\ProgramData\VoiceLink\voices\
+├── my_narrator\
+│   ├── meta.json              (name, source, creation date, model tier)
+│   ├── ref_audio.wav          (3s reference clip, for cloned voices)
+│   ├── prompt.bin             (precomputed voice clone prompt, for reuse)
+│   └── description.txt        (text description, for designed voices)
+├── warm_female\
+│   ├── meta.json
+│   ├── ref_audio.wav          (generated by VoiceDesign, then used as clone ref)
+│   ├── prompt.bin
+│   └── description.txt
+```
+
+This makes voices portable — zip and share.
+
+### Fallback Behavior
+
+- If the user selects a Qwen3 voice but the GPU is busy (another app using VRAM), the server returns an error
+- The COM DLL retry logic (already implemented) catches this, returns silence (S_OK)
+- The user hears nothing rather than a crash — same graceful degradation pattern
+- Kokoro voices always work regardless of GPU state
+
+### Config Changes
+
+```json
+{
+    "data_dir": "C:\\ProgramData\\VoiceLink",
+    "server_port": 7860,
+    "auto_start": true,
+    "qwen3_enabled": false,
+    "qwen3_model_tier": "standard",
+    "qwen3_installed": false
+}
+```
+
+### Download Sizes (What the User Needs)
+
+| Component | Already installed | Additional for Qwen3 Standard | Additional for Qwen3 Full |
+|-----------|------------------|-------------------------------|---------------------------|
+| Python 3.11 + base deps | ~950 MB | 0 | 0 |
+| Kokoro model | ~337 MB | 0 | 0 |
+| `qwen-tts` pip package | 0 | ~few 100 MB (includes torch CUDA deps) | Same |
+| Tokenizer-12Hz | 0 | ~few 100 MB | ~few 100 MB |
+| 0.6B models | 0 | ~2.4 GB (CustomVoice + Base) | 0 |
+| 1.7B models | 0 | 0 | ~10 GB (CustomVoice + VoiceDesign + Base) |
+| **Total new download** | **0** | **~3 GB** | **~10 GB** |
+
+### Implementation Order
+
+1. GPU detection command in Rust backend (`check_gpu`)
+2. Settings UI: Qwen3 section (conditional on GPU), tier picker, download trigger
+3. Qwen3 download/install flow (separate from main setup)
+4. Server endpoints: `/v1/qwen3/tts`, `/v1/qwen3/clone`, `/v1/qwen3/design`
+5. Lazy loading in server (load on first request, unload on idle)
+6. Voice Studio UI: Clone tab, Design tab
+7. Voice profile storage + registry integration
+8. COM DLL: read `Model` field, route to correct endpoint
+9. Unified Voice Manager with source badges
