@@ -1,0 +1,8 @@
+{
+  "tier": "standard",
+  "models": {
+    "Qwen/Qwen3-TTS-Tokenizer-12Hz": "ok",
+    "Qwen/Qwen3-TTS-12Hz-0.6B-Base": "ok",
+    "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice": "ok"
+  }
+}

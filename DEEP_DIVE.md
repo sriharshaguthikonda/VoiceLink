@@ -2,7 +2,7 @@
 
 > A living document. This is our knowledge base — everything we learn about TTS, COM, audio, companies, models, and system internals goes here. Not a README. A reference manual built through exploration.
 
-**Last updated:** 2026-03-03 (v5 — Qwen3-TTS deep research, integration plan, model comparison)
+**Last updated:** 2026-03-11 (v6 — Qwen3-TTS CUDA graph acceleration via faster-qwen3-tts, ~6x speedup)
 
 ---
 
@@ -296,17 +296,19 @@ This is why Kokoro can have many voices with one ~82MB model — each voice is j
 | **Tokenizer** | Qwen3-TTS-Tokenizer-12Hz (12.5 Hz, 16-layer multi-codebook, causal ConvNet) |
 | **Model sizes** | 0.6B parameters (~1.2 GB) and 1.7B parameters (~3.4 GB) |
 | **Languages** | 10: Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian |
-| **Sample rate** | Not explicitly stated, likely 24,000 Hz |
+| **Sample rate** | 24,000 Hz (confirmed) |
 | **License** | Apache 2.0 |
 | **GitHub** | https://github.com/QwenLM/Qwen3-TTS |
 | **HuggingFace** | Qwen/Qwen3-TTS-12Hz-* namespace |
-| **Python package** | `pip install qwen-tts` |
-| **Speed** | 97ms first-packet latency (streaming), needs GPU |
+| **Python package** | `pip install faster-qwen3-tts` (CUDA graph accelerated wrapper) |
+| **Speed (baseline)** | ~0.19x realtime on RTX 4060 Laptop (unusably slow) |
+| **Speed (w/ CUDA graphs)** | ~1.0-1.1x realtime on RTX 4060 Laptop (usable!) |
+| **Warmup** | First call ~100s (CUDA graph capture), subsequent calls fast |
 | **Voice cloning** | Yes — 3 second audio clip + transcript |
 | **Voice design** | Yes (1.7B only) — describe a voice in natural language |
 | **Quality** | State-of-the-art, emotion/prosody-aware, instruction-controllable |
-| **VRAM needed** | ~2 GB (0.6B with FlashAttn), ~5-6 GB (1.7B with FlashAttn) |
-| **Requires** | NVIDIA GPU with CUDA, FlashAttention 2 recommended, Python 3.12 |
+| **VRAM needed** | ~2.6 GB (0.6B), ~5-6 GB (1.7B) |
+| **Requires** | NVIDIA GPU with CUDA, Python 3.12 (no flash-attn/vLLM needed) |
 
 **Released model variants:**
 
@@ -341,8 +343,26 @@ Only 2 English speakers (both male). All speakers can speak all 10 languages, bu
 - Instruction-driven control: pass `instruct="Very happy"` or `instruct="Speak angrily"` to shape delivery
 - Voice cloning needs only 3 seconds of reference audio + transcript
 - Voice design creates voices from descriptions like "Male, 17 years old, tenor range, gaining confidence"
-- Reusable clone prompts: compute voice embeddings once, reuse across many generations
 - Fine-tuning supported on the Base models
+
+**CUDA Graph Acceleration (faster-qwen3-tts):**
+
+The baseline `qwen-tts` package is unusably slow: ~0.19x realtime on RTX 4060 Laptop (a 4-second clip takes 22 seconds to generate). The bottleneck is Python overhead between ~500 small CUDA kernel launches per decode step — the GPU spends more time waiting than computing.
+
+We use [`faster-qwen3-tts`](https://github.com/andimarafioti/faster-qwen3-tts) (MIT license) which captures the entire decode step as a CUDA graph and replays it as a single GPU operation. This eliminates all Python overhead during generation.
+
+| Metric | Baseline (qwen-tts) | CUDA Graphs (faster-qwen3-tts) |
+|--------|---------------------|-------------------------------|
+| Voice clone RTF | 0.19x (22.5s for 4.2s audio) | **1.11x** (5.0s for 5.6s audio) |
+| Built-in speaker RTF | ~0.19x | **1.0-1.04x** |
+| VRAM (0.6B) | 2.55 GB | 2.60 GB (negligible change) |
+| Audio quality | Baseline | **Identical** (same computation) |
+| First call | Instant | ~100s (CUDA graph capture, one-time) |
+| Subsequent calls | Slow | Fast (~1x realtime) |
+
+No flash-attention, no vLLM, no Triton required. Drop-in replacement with identical output.
+
+Benchmarked on: NVIDIA RTX 4060 Laptop GPU (8.6 GB VRAM), PyTorch 2.10.0+cu128, Windows 11.
 
 **Quality difference between 0.6B and 1.7B:**
 - Both have the same 9 speakers and voice cloning capability
@@ -358,13 +378,13 @@ Only 2 English speakers (both male). All speakers can speak all 10 languages, bu
 | Model size | ~82 MB (ONNX) | ~1.2 GB | ~3.4 GB |
 | Tokenizer | Misaki (included) | Tokenizer-12Hz (~few 100 MB extra) | Same |
 | GPU required | No (CPU is fine) | Yes (CUDA) | Yes (CUDA) |
-| VRAM | 0 (CPU) / ~1 GB (GPU) | ~2 GB | ~5-6 GB |
+| VRAM | 0 (CPU) / ~1 GB (GPU) | ~2.6 GB | ~5-6 GB |
 | English voices | 11 (6F, 5M) | 2 (both male) | 2 (both male) |
 | Voice cloning | No | Yes (3s clip) | Yes (3s clip) |
 | Voice design | No | No | Yes |
 | Emotion control | No | No | Yes (via instruct) |
 | Streaming | Yes (chunked) | Yes (97ms latency) | Yes (97ms latency) |
-| Speed on GPU | ~50x realtime | Slower (LLM-based) | Slower (LLM-based) |
+| Speed on GPU | ~50x realtime | ~1.0x realtime (CUDA graphs) | ~1.0x realtime (CUDA graphs) |
 | Speed on CPU | ~5-15x realtime | Not practical | Not practical |
 | Languages | 10 | 10 | 10 |
 | License | Apache 2.0 | Apache 2.0 | Apache 2.0 |
@@ -1310,7 +1330,7 @@ This makes voices portable — zip and share.
 |-----------|------------------|-------------------------------|---------------------------|
 | Python 3.11 + base deps | ~950 MB | 0 | 0 |
 | Kokoro model | ~337 MB | 0 | 0 |
-| `qwen-tts` pip package | 0 | ~few 100 MB (includes torch CUDA deps) | Same |
+| `faster-qwen3-tts` pip package | 0 | ~few 100 MB (includes torch CUDA deps) | Same |
 | Tokenizer-12Hz | 0 | ~few 100 MB | ~few 100 MB |
 | 0.6B models | 0 | ~2.4 GB (CustomVoice + Base) | 0 |
 | 1.7B models | 0 | 0 | ~10 GB (CustomVoice + VoiceDesign + Base) |

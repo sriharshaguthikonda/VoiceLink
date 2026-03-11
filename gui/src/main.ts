@@ -39,6 +39,24 @@ interface SapiStatus {
   voice_count: number;
 }
 
+interface GpuInfo {
+  available: boolean;
+  name: string | null;
+  vram_total_mb: number | null;
+  vram_free_mb: number | null;
+  can_run_standard: boolean;
+  can_run_full: boolean;
+}
+
+interface AppSettings {
+  data_dir: string;
+  server_port: number;
+  auto_start: boolean;
+  qwen3_enabled: boolean;
+  qwen3_model_tier: string;
+  qwen3_installed: boolean;
+}
+
 interface SetupStatus {
   python_installed: boolean;
   deps_installed: boolean;
@@ -62,6 +80,8 @@ interface SetupPaths {
 
 let currentVoices: VoiceInfo[] = [];
 let registeredVoiceIds: Set<string> = new Set();
+let cachedGpuInfo: GpuInfo | null = null;
+let qwen3DownloadPaused = false;
 
 // ============================================================================
 // Navigation
@@ -83,6 +103,8 @@ function setupNavigation() {
 
       if (page === "voices") loadVoices();
       if (page === "setup") refreshSetupStatus();
+      if (page === "voice-studio") setupVoiceStudioTabs();
+      if (page === "narrate") setupNarratePage();
     });
   });
 }
@@ -239,11 +261,27 @@ function renderVoices(container: HTMLElement) {
   container.innerHTML = currentVoices
     .map((v) => {
       const isEnabled = registeredVoiceIds.has(v.id);
+
+      // Source badge based on model and tags
+      let sourceBadge = "";
+      if (v.model === "qwen3") {
+        if (v.tags.includes("qwen3-designed")) {
+          sourceBadge = `<span class="badge badge-accent">Qwen3 Designed</span>`;
+        } else if (v.tags.includes("qwen3-cloned")) {
+          sourceBadge = `<span class="badge badge-warning">Qwen3 Cloned</span>`;
+        } else {
+          sourceBadge = `<span class="badge badge-success">Qwen3</span>`;
+        }
+      } else {
+        sourceBadge = `<span class="badge badge-muted">Kokoro</span>`;
+      }
+
       return `
     <div class="voice-card card ${isEnabled ? "" : "voice-disabled"}" data-voice-id="${v.id}">
       <div class="voice-header">
         <span class="voice-name">${escapeHtml(v.name)}</span>
         <div class="voice-header-right">
+          ${sourceBadge}
           <span class="voice-badge ${v.gender.toLowerCase()}">${v.gender}</span>
           <label class="switch voice-toggle" title="${isEnabled ? "Disable in SAPI" : "Enable in SAPI"}">
             <input type="checkbox" data-id="${v.id}" ${isEnabled ? "checked" : ""} />
@@ -340,7 +378,13 @@ async function handleTestVoice(voiceId: string) {
 }
 
 async function playVoicePreview(voiceId: string, text: string) {
-  const pcmBytes: number[] = await invoke("preview_voice", { voiceId, text });
+  // Route to the correct backend based on voice ID prefix
+  let pcmBytes: number[];
+  if (voiceId.startsWith("qwen3_")) {
+    pcmBytes = await invoke("qwen3_preview_voice", { voiceId, text });
+  } else {
+    pcmBytes = await invoke("preview_voice", { voiceId, text });
+  }
 
   const sampleRate = 24000;
   const audioCtx = new AudioContext({ sampleRate });
@@ -412,12 +456,24 @@ function showModal(title: string, defaultValue: string, alertOnly = false): Prom
     titleEl.textContent = title;
     overlay.classList.remove("hidden");
 
+    // Get or create a message element for alert-only mode
+    let msgEl = document.getElementById("modal-message");
+    if (!msgEl) {
+      msgEl = document.createElement("p");
+      msgEl.id = "modal-message";
+      msgEl.style.cssText = "margin: 8px 0 16px; color: var(--text-secondary); font-size: 13px; line-height: 1.5;";
+      input.parentElement!.insertBefore(msgEl, input);
+    }
+
     if (alertOnly) {
       input.style.display = "none";
+      msgEl.style.display = "";
+      msgEl.textContent = defaultValue;
       okBtn.textContent = "OK";
       cancelBtn.style.display = "none";
     } else {
       input.style.display = "";
+      msgEl.style.display = "none";
       input.value = defaultValue;
       okBtn.textContent = "Save";
       cancelBtn.style.display = "";
@@ -857,7 +913,7 @@ function setupRefreshButton() {
 }
 
 // ============================================================================
-// Settings — Auto-start toggle + server port
+// Settings — Auto-start toggle + server port + Qwen3
 // ============================================================================
 
 async function setupSettings() {
@@ -865,9 +921,9 @@ async function setupSettings() {
   const portInput = document.getElementById("setting-server-url") as HTMLInputElement | null;
 
   // Load current persisted settings
+  let settings: AppSettings | null = null;
   try {
-    const settings: { data_dir: string; server_port: number; auto_start: boolean } =
-      await invoke("get_settings");
+    settings = await invoke<AppSettings>("get_settings");
 
     if (toggle) toggle.checked = settings.auto_start;
     if (portInput) portInput.value = `http://127.0.0.1:${settings.server_port}`;
@@ -889,7 +945,6 @@ async function setupSettings() {
       await invoke("set_autostart", { enabled: toggle.checked });
     } catch (e) {
       console.error("Failed to set autostart:", e);
-      // Revert toggle on error
       toggle.checked = !toggle.checked;
     }
   });
@@ -900,6 +955,907 @@ async function setupSettings() {
     const statusEl = document.getElementById("server-status");
     if (statusEl) statusEl.textContent = "Crashed (restart failed)";
   });
+
+  // ---- Qwen3 GPU Detection & Settings ----
+  await setupQwen3Settings(settings);
+}
+
+// ============================================================================
+// Qwen3 Settings — GPU gated, only shown when CUDA GPU available
+// ============================================================================
+
+async function setupQwen3Settings(settings: AppSettings | null) {
+  const qwen3Card = document.getElementById("qwen3-settings");
+  const gpuNameEl = document.getElementById("qwen3-gpu-name");
+  const vramEl = document.getElementById("qwen3-vram");
+  const statusBadge = document.getElementById("qwen3-status-badge");
+  const qwen3Toggle = document.getElementById("setting-qwen3-enabled") as HTMLInputElement | null;
+  const tierSelect = document.getElementById("setting-qwen3-tier") as HTMLSelectElement | null;
+  const detailsSection = document.getElementById("qwen3-details");
+  const tierDescText = document.getElementById("qwen3-tier-text");
+  const downloadBtn = document.getElementById("btn-download-qwen3") as HTMLButtonElement | null;
+  const voiceStudioNav = document.getElementById("nav-voice-studio");
+
+  // Check GPU
+  try {
+    cachedGpuInfo = await invoke<GpuInfo>("check_gpu");
+  } catch (e) {
+    console.error("GPU check failed:", e);
+    // No GPU section shown
+    return;
+  }
+
+  // If no NVIDIA GPU, hide Qwen3 entirely (design decision: "clear out the option")
+  if (!cachedGpuInfo.available) {
+    // Qwen3 card stays hidden, Voice Studio nav stays hidden
+    return;
+  }
+
+  // GPU is available — show the Qwen3 settings card
+  qwen3Card?.classList.remove("hidden");
+
+  if (gpuNameEl) gpuNameEl.textContent = cachedGpuInfo.name ?? "Unknown GPU";
+  if (vramEl) {
+    const total = cachedGpuInfo.vram_total_mb ?? 0;
+    const free = cachedGpuInfo.vram_free_mb ?? 0;
+    vramEl.textContent = `${free.toLocaleString()} MB free / ${total.toLocaleString()} MB total`;
+  }
+
+  // Disable Full tier option if not enough VRAM
+  if (tierSelect) {
+    const fullOption = tierSelect.querySelector('option[value="full"]') as HTMLOptionElement | null;
+    if (fullOption && !cachedGpuInfo.can_run_full) {
+      fullOption.textContent = "Full (1.7B) — Not enough VRAM";
+      fullOption.disabled = true;
+    }
+    // Disable Standard too if not enough VRAM for even that
+    const stdOption = tierSelect.querySelector('option[value="standard"]') as HTMLOptionElement | null;
+    if (stdOption && !cachedGpuInfo.can_run_standard) {
+      stdOption.textContent = "Standard (0.6B) — Not enough VRAM";
+      stdOption.disabled = true;
+    }
+  }
+
+  // Apply persisted settings
+  if (settings) {
+    if (qwen3Toggle) qwen3Toggle.checked = settings.qwen3_enabled;
+    if (tierSelect) tierSelect.value = settings.qwen3_model_tier;
+
+    // Show details if enabled
+    if (settings.qwen3_enabled && detailsSection) {
+      detailsSection.classList.remove("hidden");
+    }
+
+    // Update status badge
+    updateQwen3StatusBadge(statusBadge, settings);
+
+    // Show Voice Studio + Narrate nav if Qwen3 enabled + installed
+    if (settings.qwen3_enabled && settings.qwen3_installed) {
+      voiceStudioNav?.classList.remove("hidden");
+      document.getElementById("nav-narrate")?.classList.remove("hidden");
+    }
+
+    // Update download button state
+    updateQwen3DownloadButton(downloadBtn, settings);
+  }
+
+  // Tier description update
+  function updateTierDescription() {
+    if (!tierDescText || !tierSelect) return;
+    if (tierSelect.value === "full") {
+      tierDescText.textContent = "All built-in voices + voice cloning + voice design + emotion control. Needs ~5 GB VRAM.";
+    } else {
+      tierDescText.textContent = "9 built-in voices + voice cloning. Needs ~2 GB VRAM.";
+    }
+  }
+  updateTierDescription();
+
+  // Handle Qwen3 enable toggle
+  qwen3Toggle?.addEventListener("change", async () => {
+    if (!qwen3Toggle) return;
+
+    // Can't enable if VRAM too low for even standard
+    if (qwen3Toggle.checked && !cachedGpuInfo?.can_run_standard) {
+      qwen3Toggle.checked = false;
+      await showModal("Not Enough VRAM", "Your GPU does not have enough VRAM to run even the Standard (0.6B) model. At least 2 GB free VRAM is required.", true);
+      return;
+    }
+
+    try {
+      await invoke("save_settings", { qwen3Enabled: qwen3Toggle.checked });
+
+      if (detailsSection) {
+        detailsSection.classList.toggle("hidden", !qwen3Toggle.checked);
+      }
+
+      // Refresh settings to update badge and nav
+      const newSettings = await invoke<AppSettings>("get_settings");
+      updateQwen3StatusBadge(statusBadge, newSettings);
+
+      if (voiceStudioNav) {
+        const showQwen3 = newSettings.qwen3_enabled && newSettings.qwen3_installed;
+        voiceStudioNav.classList.toggle("hidden", !showQwen3);
+        document.getElementById("nav-narrate")?.classList.toggle("hidden", !showQwen3);
+      }
+    } catch (e) {
+      console.error("Failed to save Qwen3 setting:", e);
+      qwen3Toggle.checked = !qwen3Toggle.checked;
+    }
+  });
+
+  // Handle tier change
+  tierSelect?.addEventListener("change", async () => {
+    if (!tierSelect) return;
+    updateTierDescription();
+    try {
+      await invoke("save_settings", { qwen3ModelTier: tierSelect.value });
+      // Re-check download state since tier changed
+      const newSettings = await invoke<AppSettings>("get_settings");
+      updateQwen3DownloadButton(downloadBtn, newSettings);
+    } catch (e) {
+      console.error("Failed to save tier:", e);
+    }
+  });
+
+  // Handle download button (download or resume)
+  downloadBtn?.addEventListener("click", async () => {
+    if (qwen3DownloadPaused) {
+      qwen3DownloadPaused = false;
+    }
+    await downloadQwen3Models();
+  });
+}
+
+function updateQwen3StatusBadge(badge: HTMLElement | null, settings: AppSettings) {
+  if (!badge) return;
+  if (!settings.qwen3_enabled) {
+    badge.textContent = "Disabled";
+    badge.className = "badge badge-muted";
+  } else if (!settings.qwen3_installed) {
+    badge.textContent = "Not Installed";
+    badge.className = "badge badge-warning";
+  } else {
+    badge.textContent = "Ready";
+    badge.className = "badge badge-success";
+  }
+}
+
+function updateQwen3DownloadButton(btn: HTMLButtonElement | null, settings: AppSettings) {
+  if (!btn) return;
+  if (settings.qwen3_installed) {
+    btn.textContent = "Models Installed";
+    btn.disabled = true;
+    btn.classList.remove("btn-primary");
+    btn.classList.add("btn-secondary");
+  } else {
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg> Download Qwen3 Models`;
+    btn.disabled = false;
+    btn.classList.add("btn-primary");
+    btn.classList.remove("btn-secondary");
+  }
+}
+
+async function downloadQwen3Models() {
+  const btn = document.getElementById("btn-download-qwen3") as HTMLButtonElement | null;
+  const progressDiv = document.getElementById("progress-qwen3");
+  const fillEl = document.getElementById("fill-qwen3") as HTMLElement | null;
+  const textEl = document.getElementById("text-qwen3");
+
+  // Show downloading state with a Cancel button
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "Cancel Download";
+    btn.classList.remove("btn-primary");
+    btn.classList.add("btn-warning");
+    // Replace click handler with cancel logic temporarily
+    btn.onclick = async () => {
+      qwen3DownloadPaused = true;
+      btn.disabled = true;
+      btn.textContent = "Cancelling...";
+      try { await invoke("cancel_qwen3_download"); } catch (_) { /* may already be done */ }
+    };
+  }
+  progressDiv?.classList.remove("hidden");
+
+  // Listen for real-time progress from the download script
+  const unlisten = await listen<{ step: string; line?: string }>("setup-progress", (event) => {
+    const { step, line } = event.payload;
+    if (!line || !textEl) return;
+    // Only handle qwen3 download events
+    if (step !== "qwen3-download" && step !== "qwen3-check" && step !== "qwen3-pip") return;
+
+    if (line.startsWith("PROGRESS:")) {
+      // e.g. "PROGRESS: 42% 1250/3000 MB -- Qwen3-TTS-12Hz-0.6B-Base/model.safetensors"
+      const match = line.match(/PROGRESS:\s*(\d+)%\s*(\d+)\/(\d+)\s*MB\s*--\s*(.*)/);
+      if (match) {
+        const [, pct, doneMb, totalMb, fileName] = match;
+        if (fillEl) fillEl.style.width = `${pct}%`;
+        const shortFile = fileName.length > 40 ? fileName.substring(0, 37) + "..." : fileName;
+        textEl.textContent = `${pct}% (${doneMb}/${totalMb} MB) ${shortFile}`;
+      }
+    } else if (line.startsWith("SIZE:")) {
+      // e.g. "SIZE: 3200 MB total across 3 models"
+      const match = line.match(/SIZE:\s*(\d+)\s*MB/);
+      if (match) {
+        textEl.textContent = `Total download: ~${match[1]} MB`;
+      }
+    } else if (line.startsWith("DOWNLOAD:")) {
+      // e.g. "DOWNLOAD: [2/3] Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+      const match = line.match(/\[(\d+)\/(\d+)\]\s*(.*)/);
+      if (match) {
+        const shortName = match[3].split("/").pop() ?? match[3];
+        textEl.textContent = `Downloading ${shortName} (${match[1]}/${match[2]})...`;
+      }
+    } else if (line.startsWith("OK:") && line.includes("->")) {
+      const parts = line.match(/OK:\s*(.*?)\s*->/);
+      if (parts) {
+        const shortName = parts[1].split("/").pop() ?? parts[1];
+        textEl.textContent = `Downloaded ${shortName}`;
+      }
+    }
+  });
+
+  try {
+    // Get paths and tier
+    const settings = await invoke<AppSettings>("get_settings");
+    const paths: SetupPaths = await invoke("get_setup_paths");
+    const tier = settings.qwen3_model_tier;
+    const pythonExe = "python";
+
+    // Step 1: Ensure huggingface_hub is installed (quick, no-op if present)
+    if (textEl) textEl.textContent = "Checking dependencies...";
+    if (fillEl) fillEl.style.width = "5%";
+
+    try {
+      await invoke("setup_run_command", {
+        program: pythonExe,
+        args: ["-c", "import huggingface_hub; print('OK')"],
+        stepName: "qwen3-check",
+      });
+    } catch {
+      if (textEl) textEl.textContent = "Installing huggingface_hub...";
+      await invoke("setup_run_command", {
+        program: pythonExe,
+        args: ["-m", "pip", "install", "--no-warn-script-location", "huggingface_hub"],
+        stepName: "qwen3-pip",
+      });
+    }
+
+    // Step 2: Download models using the robust downloader script.
+    if (textEl) textEl.textContent = "Starting model download...";
+    if (fillEl) fillEl.style.width = "10%";
+
+    const scriptPath = paths.server_dir.replace(/[/\\]$/, "") + "\\download_qwen3.py";
+    const result = await invoke<string>("setup_run_command", {
+      program: pythonExe,
+      args: [scriptPath, "--tier", tier, "--data-dir", paths.data_dir],
+      stepName: "qwen3-download",
+      env: { VOICELINK_DATA_DIR: paths.data_dir },
+    });
+
+    // Check result
+    const isDone = result.includes("DONE");
+    const isPartial = result.includes("PARTIAL");
+
+    if (isDone || isPartial) {
+      await invoke("save_settings", { qwen3Installed: true });
+
+      if (fillEl) fillEl.style.width = "100%";
+      if (textEl) textEl.textContent = isDone ? "All models downloaded!" : "Downloaded (some models had issues)";
+
+      const newSettings = await invoke<AppSettings>("get_settings");
+      const statusBadge = document.getElementById("qwen3-status-badge");
+      updateQwen3StatusBadge(statusBadge, newSettings);
+      updateQwen3DownloadButton(btn, newSettings);
+
+      const voiceStudioNav = document.getElementById("nav-voice-studio");
+      if (newSettings.qwen3_enabled && newSettings.qwen3_installed) {
+        voiceStudioNav?.classList.remove("hidden");
+        document.getElementById("nav-narrate")?.classList.remove("hidden");
+      }
+    } else {
+      throw new Error("Download completed but could not verify success");
+    }
+  } catch (e) {
+    console.error("Qwen3 download failed:", e);
+    const errStr = String(e);
+
+    if (qwen3DownloadPaused) {
+      // User paused — show resume button
+      if (textEl) textEl.textContent = "Download paused. Progress is saved — resume anytime.";
+      if (fillEl) fillEl.style.width = "0%";
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Resume Download";
+        btn.classList.remove("btn-warning");
+        btn.classList.add("btn-primary");
+        btn.onclick = null; // Reset to default handler
+      }
+    } else {
+      // Actual error
+      const shortErr = extractDownloadError(errStr);
+      if (textEl) textEl.textContent = `Failed: ${shortErr}`;
+      if (fillEl) fillEl.style.width = "0%";
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Retry Download";
+        btn.classList.remove("btn-warning");
+        btn.classList.add("btn-primary");
+        btn.onclick = null;
+      }
+    }
+  } finally {
+    unlisten();
+  }
+}
+
+/** Extract the most useful error line from a download failure message */
+function extractDownloadError(error: string): string {
+  // Look for our structured error messages first
+  const errorLine = error.split("\n").find(l => l.includes("ERROR:") || l.includes("FATAL:"));
+  if (errorLine) {
+    return errorLine.replace(/^.*?(ERROR:|FATAL:)\s*/, "").trim();
+  }
+  // Fallback: truncate long errors
+  const clean = error.replace(/^.*?Command failed:\s*/s, "").trim();
+  return clean.length > 200 ? clean.slice(0, 200) + "..." : clean;
+}
+
+// ============================================================================
+// Voice Studio — Clone, Design, and Built-in Qwen3 voice management
+// ============================================================================
+
+function setupVoiceStudioTabs() {
+  // Tab switching
+  const tabs = document.querySelectorAll<HTMLElement>(".studio-tab");
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const targetTab = tab.dataset.tab;
+      if (!targetTab) return;
+
+      tabs.forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+
+      document.querySelectorAll<HTMLElement>(".studio-panel").forEach((panel) => {
+        panel.classList.toggle("active", panel.id === `studio-${targetTab}`);
+      });
+    });
+  });
+
+  // Clone form validation — enable Preview button when all fields filled
+  setupCloneForm();
+
+  // Design form validation — enable Generate button when fields filled
+  setupDesignForm();
+
+  // Load built-in Qwen3 voices list
+  loadQwen3Voices();
+}
+
+// ---- Clone Voice Form ----
+
+function setupCloneForm() {
+  const nameInput = document.getElementById("clone-name") as HTMLInputElement | null;
+  const audioInput = document.getElementById("clone-audio") as HTMLInputElement | null;
+  const transcriptInput = document.getElementById("clone-transcript") as HTMLInputElement | null;
+  const genderSelect = document.getElementById("clone-gender") as HTMLSelectElement | null;
+  const descriptionInput = document.getElementById("clone-description") as HTMLInputElement | null;
+  const cloneBtn = document.getElementById("btn-clone-create") as HTMLButtonElement | null;
+  const tempContainer = document.getElementById("clone-temp-voices");
+
+  if (!nameInput || !audioInput || !transcriptInput || !cloneBtn || !tempContainer) return;
+
+  // Track temp clones in memory (gone when app closes)
+  interface TempClone {
+    voiceId: string;
+    name: string;
+    gender: string;
+    description: string;
+    saved: boolean;
+  }
+  const tempClones: TempClone[] = [];
+
+  function validateCloneForm() {
+    const valid =
+      nameInput!.value.trim().length > 0 &&
+      audioInput!.files != null &&
+      audioInput!.files.length > 0 &&
+      transcriptInput!.value.trim().length > 0;
+    cloneBtn!.disabled = !valid;
+  }
+
+  nameInput.addEventListener("input", validateCloneForm);
+  audioInput.addEventListener("change", validateCloneForm);
+  transcriptInput.addEventListener("input", validateCloneForm);
+
+  function renderTempCards() {
+    if (!tempContainer) return;
+    if (tempClones.length === 0) {
+      tempContainer.innerHTML = "";
+      return;
+    }
+    tempContainer.innerHTML = tempClones.map((clone, idx) => `
+      <div class="clone-temp-card" data-idx="${idx}" data-voice-id="${escapeHtml(clone.voiceId)}">
+        <div class="clone-temp-header">
+          <div class="clone-temp-info">
+            <span class="clone-temp-name">${escapeHtml(clone.name)}</span>
+            <span class="voice-badge ${clone.gender}">${escapeHtml(clone.gender === "unknown" ? "Other" : clone.gender)}</span>
+            <span class="clone-temp-badge ${clone.saved ? "saved" : "temp"}">${clone.saved ? "Saved" : "Unsaved"}</span>
+          </div>
+        </div>
+        ${clone.description ? `<div class="clone-temp-desc">${escapeHtml(clone.description)}</div>` : ""}
+        <div class="clone-temp-test">
+          <input type="text" class="temp-test-text" placeholder="Type text to test this voice..." value="Hello, this is a test of my cloned voice." />
+          <button class="btn btn-test-play temp-test-btn" data-idx="${idx}">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Test
+          </button>
+        </div>
+        <div class="clone-temp-actions">
+          <button class="btn btn-discard temp-discard-btn" data-idx="${idx}">Discard</button>
+          ${!clone.saved ? `<button class="btn btn-save-lib temp-save-btn" data-idx="${idx}">Save to Library</button>` : ""}
+        </div>
+      </div>
+    `).join("");
+
+    // Wire test buttons
+    tempContainer.querySelectorAll<HTMLButtonElement>(".temp-test-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const idx = parseInt(btn.dataset.idx || "0");
+        const clone = tempClones[idx];
+        if (!clone) return;
+        const card = btn.closest(".clone-temp-card") as HTMLElement;
+        const textInput = card?.querySelector(".temp-test-text") as HTMLInputElement;
+        const text = textInput?.value.trim();
+        if (!text) return;
+
+        btn.disabled = true;
+        btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Playing...`;
+
+        try {
+          const pcmBytes = await invoke<number[]>("qwen3_preview_voice", {
+            voiceId: clone.voiceId,
+            text,
+          });
+          if (pcmBytes && pcmBytes.length > 0) {
+            playPcmAudio(new Uint8Array(pcmBytes));
+          }
+        } catch (e: any) {
+          console.error("Test clone failed:", e);
+          await showModal("Error", `Test failed: ${e}`, true);
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> Test`;
+        }
+      });
+    });
+
+    // Wire save buttons
+    tempContainer.querySelectorAll<HTMLButtonElement>(".temp-save-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const idx = parseInt(btn.dataset.idx || "0");
+        const clone = tempClones[idx];
+        if (!clone) return;
+
+        btn.disabled = true;
+        btn.textContent = "Saving...";
+
+        try {
+          clone.saved = true;
+          renderTempCards();
+          await showModal("Saved", `"${clone.name}" saved to your voice library. You can find it in Qwen3 Voices.`, true);
+          loadQwen3Voices();
+        } catch (e: any) {
+          clone.saved = false;
+          console.error("Save failed:", e);
+          await showModal("Error", `Failed to save: ${e}`, true);
+          renderTempCards();
+        }
+      });
+    });
+
+    // Wire discard buttons
+    tempContainer.querySelectorAll<HTMLButtonElement>(".temp-discard-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const idx = parseInt(btn.dataset.idx || "0");
+        const clone = tempClones[idx];
+        if (!clone) return;
+
+        // Delete from server
+        try {
+          await invoke("qwen3_delete_clone", { voiceId: clone.voiceId });
+        } catch (e) {
+          console.warn("Server cleanup failed (may already be removed):", e);
+        }
+
+        tempClones.splice(idx, 1);
+        renderTempCards();
+      });
+    });
+  }
+
+  // Clone button: create the clone, play preview, show temp card
+  cloneBtn.addEventListener("click", async () => {
+    const file = audioInput.files?.[0];
+    if (!file) return;
+
+    cloneBtn.disabled = true;
+    cloneBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Cloning...`;
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const audioData = Array.from(new Uint8Array(arrayBuffer));
+
+      const pcmBytes = await invoke<number[]>("qwen3_clone_voice", {
+        name: nameInput.value.trim(),
+        transcript: transcriptInput.value.trim(),
+        audioData,
+        audioFilename: file.name,
+        gender: genderSelect?.value || "unknown",
+        description: descriptionInput?.value.trim() || "",
+        previewText: "Hello, this is a preview of the cloned voice.",
+      });
+
+      const safeName = nameInput.value.trim().replace(/[^a-zA-Z0-9_\- ]/g, "").trim();
+      const voiceId = `qwen3_custom_${safeName}`;
+
+      // Play the preview audio
+      if (pcmBytes && pcmBytes.length > 0) {
+        playPcmAudio(new Uint8Array(pcmBytes));
+      }
+
+      // Add temp card
+      tempClones.push({
+        voiceId,
+        name: nameInput.value.trim(),
+        gender: genderSelect?.value || "unknown",
+        description: descriptionInput?.value.trim() || "",
+        saved: false,
+      });
+      renderTempCards();
+
+      // Reset form for next clone
+      nameInput.value = "";
+      audioInput.value = "";
+      transcriptInput.value = "";
+      if (descriptionInput) descriptionInput.value = "";
+      validateCloneForm();
+
+    } catch (e: any) {
+      console.error("Clone failed:", e);
+      await showModal("Error", `Voice cloning failed: ${e}`, true);
+    } finally {
+      cloneBtn.disabled = false;
+      cloneBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg> Clone Voice`;
+      validateCloneForm();
+    }
+  });
+}
+
+// ---- Design Voice Form ----
+
+function setupDesignForm() {
+  const nameInput = document.getElementById("design-name") as HTMLInputElement | null;
+  const descInput = document.getElementById("design-description") as HTMLTextAreaElement | null;
+  const generateBtn = document.getElementById("btn-design-generate") as HTMLButtonElement | null;
+  const saveBtn = document.getElementById("btn-design-save") as HTMLButtonElement | null;
+
+  if (!nameInput || !descInput || !generateBtn || !saveBtn) return;
+
+  let lastDesignVoiceId: string | null = null;
+
+  function validateDesignForm() {
+    const valid =
+      nameInput!.value.trim().length > 0 &&
+      descInput!.value.trim().length >= 10;
+    generateBtn!.disabled = !valid;
+  }
+
+  nameInput.addEventListener("input", validateDesignForm);
+  descInput.addEventListener("input", validateDesignForm);
+
+  // Generate: design the voice and play preview
+  generateBtn.addEventListener("click", async () => {
+    generateBtn.disabled = true;
+    generateBtn.textContent = "Generating...";
+
+    try {
+      const pcmBytes = await invoke<number[]>("qwen3_design_voice", {
+        name: nameInput.value.trim(),
+        description: descInput.value.trim(),
+        sampleText: "Hello, this is a preview of the designed voice.",
+      });
+
+      if (pcmBytes && pcmBytes.length > 0) {
+        playPcmAudio(new Uint8Array(pcmBytes));
+        lastDesignVoiceId = `qwen3_custom_${nameInput.value.trim().replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+        saveBtn.disabled = false;
+      }
+    } catch (e: any) {
+      console.error("Design voice failed:", e);
+      alert(`Voice design failed: ${e}`);
+    } finally {
+      generateBtn.disabled = false;
+      generateBtn.textContent = "Generate";
+    }
+  });
+
+  // Save: register the designed voice in SAPI
+  saveBtn.addEventListener("click", async () => {
+    if (!lastDesignVoiceId) return;
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving...";
+
+    try {
+      await invoke("toggle_voice", { voiceId: lastDesignVoiceId, enabled: true });
+      alert(`Voice "${nameInput.value.trim()}" saved and registered in SAPI!`);
+      loadVoices();
+      loadQwen3Voices();
+    } catch (e: any) {
+      console.error("Save designed voice failed:", e);
+      alert(`Failed to save voice: ${e}`);
+    } finally {
+      saveBtn.textContent = "Save to Library";
+    }
+  });
+}
+
+// ---- Built-in Qwen3 Voices ----
+
+async function loadQwen3Voices() {
+  const container = document.getElementById("qwen3-voices-list");
+  if (!container) return;
+
+  try {
+    const speakers = await invoke<any[]>("qwen3_list_speakers");
+    if (!speakers || speakers.length === 0) {
+      container.innerHTML = `<p class="placeholder">No Qwen3 voices found. Download the models first.</p>`;
+      return;
+    }
+
+    container.innerHTML = speakers
+      .map(
+        (v) => `
+      <div class="voice-card card" data-voice-id="${escapeHtml(v.id)}">
+        <div class="voice-header">
+          <span class="voice-name">${escapeHtml(v.name)}</span>
+          <div class="voice-header-right">
+            <span class="voice-badge ${v.gender?.toLowerCase() || ""}">${escapeHtml(v.gender || "")}</span>
+            ${v.tags?.map((t: string) => `<span class="voice-tag">${escapeHtml(t)}</span>`).join("") || ""}
+          </div>
+        </div>
+        <div class="voice-description">${escapeHtml(v.description || "")}</div>
+        <div class="voice-actions">
+          <button class="btn btn-sm btn-secondary qwen3-preview-btn" data-voice="${escapeHtml(v.id)}">Preview</button>
+        </div>
+      </div>
+    `
+      )
+      .join("");
+
+    // Wire preview buttons
+    container.querySelectorAll<HTMLButtonElement>(".qwen3-preview-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const voiceId = btn.dataset.voice;
+        if (!voiceId) return;
+
+        btn.disabled = true;
+        btn.textContent = "Playing...";
+
+        try {
+          const pcmBytes = await invoke<number[]>("qwen3_preview_voice", {
+            voiceId,
+            text: "Hello! This is a preview of my voice.",
+          });
+          if (pcmBytes && pcmBytes.length > 0) {
+            playPcmAudio(new Uint8Array(pcmBytes));
+          }
+        } catch (e: any) {
+          console.error("Qwen3 preview failed:", e);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Preview";
+        }
+      });
+    });
+  } catch (e) {
+    container.innerHTML = `<p class="placeholder">Could not load Qwen3 voices. Is the server running?</p>`;
+    console.error("Load Qwen3 voices failed:", e);
+  }
+}
+
+// ---- PCM Audio Playback ----
+
+// ============================================================================
+// Narrate Page
+// ============================================================================
+
+let narrateInitialized = false;
+let narratePcmData: Uint8Array | null = null;
+
+function setupNarratePage() {
+  const voiceSelect = document.getElementById("narrate-voice") as HTMLSelectElement | null;
+  const textArea = document.getElementById("narrate-text") as HTMLTextAreaElement | null;
+  const fileInput = document.getElementById("narrate-file") as HTMLInputElement | null;
+  const speedSlider = document.getElementById("narrate-speed") as HTMLInputElement | null;
+  const speedLabel = document.getElementById("narrate-speed-label");
+  const charCount = document.getElementById("narrate-char-count");
+  const generateBtn = document.getElementById("btn-narrate-generate") as HTMLButtonElement | null;
+
+  if (!voiceSelect || !textArea) return;
+
+  // Populate voice selector with Qwen3 voices
+  const qwen3Voices = currentVoices.filter((v) => v.id.startsWith("qwen3_"));
+  voiceSelect.innerHTML = qwen3Voices
+    .map((v) => `<option value="${v.id}">${escapeHtml(v.name)}</option>`)
+    .join("");
+
+  if (narrateInitialized) return;
+  narrateInitialized = true;
+
+  // Speed slider update
+  speedSlider?.addEventListener("input", () => {
+    if (speedLabel) speedLabel.textContent = `${parseFloat(speedSlider.value).toFixed(2)}×`;
+  });
+
+  // Character count update
+  textArea.addEventListener("input", () => {
+    const len = textArea.value.length;
+    if (charCount) charCount.textContent = `${len.toLocaleString()} / 50,000 characters`;
+    if (generateBtn) generateBtn.disabled = len === 0;
+  });
+
+  // File upload: read text content
+  fileInput?.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = reader.result as string;
+      textArea.value = content.substring(0, 50000);
+      textArea.dispatchEvent(new Event("input"));
+    };
+    reader.readAsText(file);
+  });
+
+  // Generate narration
+  generateBtn?.addEventListener("click", async () => {
+    const text = textArea.value.trim();
+    if (!text) return;
+
+    const voiceId = voiceSelect.value;
+    const language = (document.getElementById("narrate-language") as HTMLSelectElement)?.value || "auto";
+    const speed = parseFloat(speedSlider?.value || "1.0");
+
+    const progressDiv = document.getElementById("narrate-progress");
+    const statusEl = document.getElementById("narrate-status");
+    const progressBar = document.getElementById("narrate-progress-bar");
+    const resultDiv = document.getElementById("narrate-result");
+
+    generateBtn.disabled = true;
+    generateBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Generating...`;
+    if (progressDiv) progressDiv.style.display = "block";
+    if (resultDiv) resultDiv.style.display = "none";
+    if (statusEl) statusEl.textContent = "Generating narration...";
+    if (progressBar) progressBar.style.width = "30%";
+
+    try {
+      const pcmBytes = await invoke<number[]>("qwen3_narrate", {
+        voiceId,
+        text,
+        language,
+        speed,
+      });
+
+      if (progressBar) progressBar.style.width = "100%";
+      if (statusEl) statusEl.textContent = "Done!";
+
+      if (pcmBytes && pcmBytes.length > 0) {
+        narratePcmData = new Uint8Array(pcmBytes);
+        const durationSecs = (narratePcmData.length / 2) / 24000;
+        const durationEl = document.getElementById("narrate-duration");
+        if (durationEl) {
+          const mins = Math.floor(durationSecs / 60);
+          const secs = Math.floor(durationSecs % 60);
+          durationEl.textContent = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+        }
+
+        // Create a WAV blob for the <audio> element
+        const wavBlob = pcmToWavBlob(narratePcmData, 24000);
+        const audioEl = document.getElementById("narrate-audio") as HTMLAudioElement | null;
+        if (audioEl) {
+          audioEl.src = URL.createObjectURL(wavBlob);
+        }
+
+        if (resultDiv) resultDiv.style.display = "block";
+      }
+    } catch (e: any) {
+      console.error("Narration failed:", e);
+      if (statusEl) statusEl.textContent = `Error: ${e}`;
+    } finally {
+      generateBtn.disabled = false;
+      generateBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3" /></svg> Generate Narration`;
+      setTimeout(() => {
+        if (progressDiv) progressDiv.style.display = "none";
+      }, 3000);
+    }
+  });
+
+  // Play button
+  document.getElementById("btn-narrate-play")?.addEventListener("click", () => {
+    if (narratePcmData) playPcmAudio(narratePcmData);
+  });
+
+  // Download WAV button
+  document.getElementById("btn-narrate-download")?.addEventListener("click", () => {
+    if (!narratePcmData) return;
+    const wavBlob = pcmToWavBlob(narratePcmData, 24000);
+    const url = URL.createObjectURL(wavBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "narration.wav";
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+}
+
+/** Convert raw 16-bit PCM bytes to a WAV Blob */
+function pcmToWavBlob(pcmData: Uint8Array, sampleRate: number): Blob {
+  const numSamples = pcmData.length / 2;
+  const buffer = new ArrayBuffer(44 + pcmData.length);
+  const view = new DataView(buffer);
+
+  // RIFF header
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + pcmData.length, true);
+  writeString(view, 8, "WAVE");
+
+  // fmt chunk
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);         // chunk size
+  view.setUint16(20, 1, true);          // PCM format
+  view.setUint16(22, 1, true);          // mono
+  view.setUint32(24, sampleRate, true); // sample rate
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true);          // block align
+  view.setUint16(34, 16, true);         // bits per sample
+
+  // data chunk
+  writeString(view, 36, "data");
+  view.setUint32(40, pcmData.length, true);
+  new Uint8Array(buffer, 44).set(pcmData);
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
+}
+
+// ============================================================================
+// PCM Playback
+// ============================================================================
+
+function playPcmAudio(pcmData: Uint8Array) {
+  try {
+    const audioCtx = new AudioContext({ sampleRate: 24000 });
+    const int16 = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) {
+      float32[i] = int16[i] / 32768;
+    }
+    const buffer = audioCtx.createBuffer(1, float32.length, 24000);
+    buffer.copyToChannel(float32, 0);
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioCtx.destination);
+    source.start();
+    source.onended = () => audioCtx.close();
+  } catch (e) {
+    console.error("PCM playback failed:", e);
+  }
 }
 
 // ============================================================================

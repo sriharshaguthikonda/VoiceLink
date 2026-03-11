@@ -59,6 +59,16 @@ class ModelSettings(BaseSettings):
         description="Default Kokoro voice ID if none specified in request.",
     )
 
+    # Qwen3-specific
+    qwen3_tier: str = Field(
+        default="standard",
+        description="Qwen3 model tier: 'standard' (0.6B) or 'full' (1.7B).",
+    )
+    qwen3_enabled: bool = Field(
+        default=False,
+        description="Whether Qwen3 TTS is enabled (requires CUDA GPU).",
+    )
+
     # Device selection
     device: str = Field(
         default="auto",

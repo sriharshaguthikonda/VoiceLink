@@ -33,6 +33,7 @@ pub struct VoiceInfo {
     pub language: String,
     pub gender: String,
     pub description: String,
+    #[serde(default)]
     pub model: String,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -67,6 +68,16 @@ pub struct SapiStatus {
     pub voice_count: u32,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GpuInfo {
+    pub available: bool,
+    pub name: Option<String>,
+    pub vram_total_mb: Option<u64>,
+    pub vram_free_mb: Option<u64>,
+    pub can_run_standard: bool, // 0.6B needs ~2 GB
+    pub can_run_full: bool,     // 1.7B needs ~5 GB
+}
+
 // ============================================================================
 // Setup Types & Paths
 // ============================================================================
@@ -79,6 +90,16 @@ struct AppConfig {
     server_port: u16,
     #[serde(default)]
     auto_start: bool,
+    #[serde(default)]
+    qwen3_enabled: bool,
+    #[serde(default = "default_qwen3_tier")]
+    qwen3_model_tier: String, // "standard" (0.6B) or "full" (1.7B)
+    #[serde(default)]
+    qwen3_installed: bool,
+}
+
+fn default_qwen3_tier() -> String {
+    "standard".to_string()
 }
 
 fn default_server_port() -> u16 {
@@ -96,6 +117,9 @@ impl Default for AppConfig {
                 .to_string(),
             server_port: 7860,
             auto_start: false,
+            qwen3_enabled: false,
+            qwen3_model_tier: "standard".to_string(),
+            qwen3_installed: false,
         }
     }
 }
@@ -149,6 +173,10 @@ impl AppConfig {
     fn model_dir(&self) -> PathBuf {
         self.data_dir().join("models")
     }
+
+    fn voices_dir(&self) -> PathBuf {
+        self.data_dir().join("voices")
+    }
 }
 
 /// Status of each setup step
@@ -167,6 +195,9 @@ struct ServerProcess(Option<std::process::Child>);
 
 /// Whether we intentionally started the server (vs found it running externally)
 struct ServerManagedByUs(bool);
+
+/// PID of the currently running Qwen3 download process (for cancel/pause)
+struct DownloadPid(Option<u32>);
 
 // ============================================================================
 // Tauri Commands — Called from the frontend via invoke()
@@ -208,6 +239,66 @@ fn get_sapi_status() -> Result<SapiStatus, String> {
     })
 }
 
+/// Detect NVIDIA GPU via nvidia-smi (no Python/torch required).
+/// Returns GPU info including VRAM — used to gate Qwen3 UI visibility.
+/// If no NVIDIA GPU or nvidia-smi not found, returns available=false.
+#[tauri::command]
+fn check_gpu() -> Result<GpuInfo, String> {
+    // Try running nvidia-smi to query GPU info
+    let output = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total,memory.free",
+            "--format=csv,noheader,nounits",
+        ])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // Parse: "NVIDIA GeForce RTX 3060, 12288, 10240"
+            let line = stdout.trim().lines().next().unwrap_or("");
+            let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+
+            if parts.len() >= 3 {
+                let name = parts[0].to_string();
+                let total_mb = parts[1].parse::<u64>().unwrap_or(0);
+                let free_mb = parts[2].parse::<u64>().unwrap_or(0);
+
+                Ok(GpuInfo {
+                    available: true,
+                    name: Some(name),
+                    vram_total_mb: Some(total_mb),
+                    vram_free_mb: Some(free_mb),
+                    can_run_standard: total_mb >= 2048,  // 0.6B needs ~2 GB total
+                    can_run_full: total_mb >= 6144,      // 1.7B needs ~5 GB; 6 GB total headroom
+                })
+            } else {
+                // nvidia-smi returned unexpected format
+                Ok(GpuInfo {
+                    available: false,
+                    name: None,
+                    vram_total_mb: None,
+                    vram_free_mb: None,
+                    can_run_standard: false,
+                    can_run_full: false,
+                })
+            }
+        }
+        _ => {
+            // nvidia-smi not found or errored — no NVIDIA GPU
+            Ok(GpuInfo {
+                available: false,
+                name: None,
+                vram_total_mb: None,
+                vram_free_mb: None,
+                can_run_standard: false,
+                can_run_full: false,
+            })
+        }
+    }
+}
+
 /// Check if the inference server is running and healthy
 #[tauri::command]
 async fn get_server_status() -> Result<ServerStatus, String> {
@@ -238,14 +329,21 @@ async fn get_server_status() -> Result<ServerStatus, String> {
     }
 }
 
-/// Get list of voices from the inference server, with registry name overrides
+/// Get list of voices from the inference server, with registry name overrides.
+/// Merges Kokoro voices from /v1/voices with Qwen3 voices from /v1/qwen3/speakers.
 #[tauri::command]
-async fn get_voices() -> Result<Vec<VoiceInfo>, String> {
+async fn get_voices(config: tauri::State<'_, Mutex<AppConfig>>) -> Result<Vec<VoiceInfo>, String> {
+    let qwen3_enabled = {
+        let cfg = config.lock().unwrap();
+        cfg.qwen3_enabled
+    };
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
 
+    // Fetch Kokoro voices
     let resp = client
         .get("http://127.0.0.1:7860/v1/voices")
         .send()
@@ -253,6 +351,33 @@ async fn get_voices() -> Result<Vec<VoiceInfo>, String> {
         .map_err(|e| format!("Server not reachable: {}", e))?;
 
     let mut voices: Vec<VoiceInfo> = resp.json().await.map_err(|e| e.to_string())?;
+
+    // Fetch Qwen3 voices if enabled
+    if qwen3_enabled {
+        if let Ok(qwen3_resp) = client
+            .get("http://127.0.0.1:7860/v1/qwen3/speakers")
+            .send()
+            .await
+        {
+            if let Ok(qwen3_voices) = qwen3_resp.json::<Vec<serde_json::Value>>().await {
+                for qv in qwen3_voices {
+                    voices.push(VoiceInfo {
+                        id: qv.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        name: qv.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        language: qv.get("language").and_then(|v| v.as_str()).unwrap_or("en-US").to_string(),
+                        gender: qv.get("gender").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+                        description: qv.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        model: "qwen3".to_string(),
+                        tags: qv.get("tags")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect())
+                            .unwrap_or_default(),
+                        sample_rate: qv.get("sample_rate").and_then(|v| v.as_u64()).unwrap_or(24000) as u32,
+                    });
+                }
+            }
+        }
+    }
 
     // Read custom names from registry and override server names
     {
@@ -293,33 +418,54 @@ fn rename_voice(voice_id: String, new_name: String) -> Result<(), String> {
     use winreg::RegKey;
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let token_name = format!("VoiceLink_{}", voice_id);
 
     let token_roots = [
         r"SOFTWARE\Microsoft\Speech\Voices\Tokens",
         r"SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens",
     ];
 
-    let token_name = format!("VoiceLink_{}", voice_id);
+    // Try direct HKLM write
+    let has_access = hklm
+        .open_subkey_with_flags(
+            r"SOFTWARE\Microsoft\Speech\Voices\Tokens",
+            KEY_WRITE,
+        )
+        .is_ok();
 
-    for root in &token_roots {
-        let token_path = format!("{}\\{}", root, token_name);
-
-        // Update the token's (Default) value — this is what SAPI apps display
-        match hklm.open_subkey_with_flags(&token_path, KEY_SET_VALUE) {
-            Ok(key) => {
-                key.set_value("", &new_name).map_err(|e| e.to_string())?;
+    if has_access {
+        for root in &token_roots {
+            let token_path = format!("{}\\{}", root, token_name);
+            match hklm.open_subkey_with_flags(&token_path, KEY_SET_VALUE) {
+                Ok(key) => {
+                    key.set_value("", &new_name).map_err(|e| e.to_string())?;
+                }
+                Err(_) => {}
             }
-            Err(_) => {}
-        }
-
-        // Also update the Attributes\Name subkey
-        let attrs_path = format!("{}\\Attributes", token_path);
-        match hklm.open_subkey_with_flags(&attrs_path, KEY_SET_VALUE) {
-            Ok(key) => {
-                key.set_value("Name", &new_name).map_err(|e| e.to_string())?;
+            let attrs_path = format!("{}\\Attributes", token_path);
+            match hklm.open_subkey_with_flags(&attrs_path, KEY_SET_VALUE) {
+                Ok(key) => {
+                    key.set_value("Name", &new_name).map_err(|e| e.to_string())?;
+                }
+                Err(_) => {}
             }
-            Err(_) => {}
         }
+    } else {
+        // Elevate: build PowerShell commands for rename
+        let mut ps_cmds = Vec::new();
+        for root in &token_roots {
+            let reg_path = format!("HKLM:\\{}\\{}", root, token_name);
+            ps_cmds.push(format!(
+                "if (Test-Path '{}') {{ Set-ItemProperty -Path '{}' -Name '(Default)' -Value '{}' }}",
+                reg_path, reg_path, new_name.replace('\'', "''")
+            ));
+            let attrs_path = format!("{}\\Attributes", reg_path);
+            ps_cmds.push(format!(
+                "if (Test-Path '{}') {{ Set-ItemProperty -Path '{}' -Name 'Name' -Value '{}' }}",
+                attrs_path, attrs_path, new_name.replace('\'', "''")
+            ));
+        }
+        run_elevated_powershell(&ps_cmds.join("; "))?;
     }
 
     Ok(())
@@ -357,6 +503,21 @@ fn get_registered_voice_ids() -> Result<Vec<String>, String> {
     use winreg::enums::*;
     use winreg::RegKey;
 
+    // Clean up any stale HKCU entries from a previous version
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if let Ok(tokens_key) = hkcu
+        .open_subkey_with_flags(r"SOFTWARE\Microsoft\Speech\Voices\Tokens", KEY_READ | KEY_WRITE)
+    {
+        let stale: Vec<String> = tokens_key
+            .enum_keys()
+            .filter_map(|r| r.ok())
+            .filter(|n| n.starts_with("VoiceLink_"))
+            .collect();
+        for name in &stale {
+            let _ = tokens_key.delete_subkey_all(name);
+        }
+    }
+
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let mut ids = Vec::new();
 
@@ -373,27 +534,57 @@ fn get_registered_voice_ids() -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
-/// Toggle a voice on/off in SAPI by adding/removing its registry token
+/// Run a PowerShell command elevated via UAC prompt.
+/// Writes commands to a temp .ps1 file and runs it elevated to avoid quoting issues.
+fn run_elevated_powershell(commands: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::io::Write;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    // Write commands to a temporary .ps1 script file
+    let temp_dir = std::env::temp_dir();
+    let script_path = temp_dir.join("voicelink_elevate.ps1");
+    {
+        let mut f = std::fs::File::create(&script_path)
+            .map_err(|e| format!("Failed to create temp script: {}", e))?;
+        f.write_all(commands.as_bytes())
+            .map_err(|e| format!("Failed to write temp script: {}", e))?;
+    }
+
+    let script_str = script_path.to_string_lossy().to_string();
+
+    // Use Start-Process to run the script elevated
+    let status = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"{}\"' -Verb RunAs -Wait",
+                script_str
+            ),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("Failed to launch elevation prompt: {}", e))?;
+
+    // Clean up temp script
+    let _ = std::fs::remove_file(&script_path);
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Elevation was cancelled or failed. Voice toggling requires a one-time permission grant.".to_string())
+    }
+}
+
+/// Toggle a voice on/off in SAPI by adding/removing its registry token.
+/// Tries direct HKLM write first; if not admin, elevates via UAC prompt.
 #[tauri::command]
 fn toggle_voice(voice_id: String, enabled: bool) -> Result<(), String> {
     use winreg::enums::*;
     use winreg::RegKey;
 
-    // Check if we have admin privileges by trying to open HKLM with write access
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if hklm
-        .open_subkey_with_flags(
-            r"SOFTWARE\Microsoft\Speech\Voices\Tokens",
-            KEY_WRITE,
-        )
-        .is_err()
-    {
-        return Err(
-            "Administrator privileges required. Please restart VoiceLink as Administrator to toggle voices."
-                .to_string(),
-        );
-    }
-
     let token_name = format!("VoiceLink_{}", voice_id);
 
     let token_roots = [
@@ -401,8 +592,16 @@ fn toggle_voice(voice_id: String, enabled: bool) -> Result<(), String> {
         r"SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens",
     ];
 
+    // Check if we have direct HKLM write access
+    let has_access = hklm
+        .open_subkey_with_flags(
+            r"SOFTWARE\Microsoft\Speech\Voices\Tokens",
+            KEY_WRITE,
+        )
+        .is_ok();
+
     if enabled {
-        // Re-register voice token: read CLSID from InprocServer32
+        // Read CLSID from InprocServer32
         let hkcr = RegKey::predef(HKEY_CLASSES_ROOT);
         let clsid = "{D7A5E2B1-3F8C-4E69-A1B4-7C2D9E0F5A38}";
         let dll_path: String = hkcr
@@ -417,54 +616,339 @@ fn toggle_voice(voice_id: String, enabled: bool) -> Result<(), String> {
             return Err("COM DLL not registered. Run regsvr32 first.".to_string());
         }
 
-        // Fetch voice metadata from server to get gender/language
-        // For now, use the voice_id to infer language (a=en-US, b=en-GB)
         let lang = if voice_id.starts_with('b') { "809" } else { "409" };
-        let gender = if voice_id.contains("_m_") || voice_id.starts_with("am_") || voice_id.starts_with("bm_") {
+        let is_qwen3 = voice_id.starts_with("qwen3_");
+        let model_name = if is_qwen3 { "qwen3" } else { "kokoro" };
+
+        let gender = if is_qwen3 {
+            match voice_id.as_str() {
+                "qwen3_serena" | "qwen3_vivian" | "qwen3_ono_anna" | "qwen3_sohee" => "Female",
+                _ => "Male"
+            }
+        } else if voice_id.contains("_m_") || voice_id.starts_with("am_") || voice_id.starts_with("bm_") {
             "Male"
         } else {
             "Female"
         };
-        // Capitalize voice name from ID (e.g. af_heart -> Heart)
-        let raw_name = voice_id.split('_').last().unwrap_or(&voice_id);
-        let display_name = format!("{} (Kokoro)",
-            raw_name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()
-                + &raw_name[1..]
-        );
 
-        for root in &token_roots {
-            let token_path = format!("{}\\{}", root, token_name);
-            let (token_key, _) = hklm
-                .create_subkey_with_flags(&token_path, KEY_WRITE)
-                .map_err(|e| format!("Failed to create token key: {}", e))?;
+        let display_name = if is_qwen3 {
+            let name_part = if let Some(stripped) = voice_id.strip_prefix("qwen3_custom_") {
+                stripped.to_string()
+            } else if let Some(stripped) = voice_id.strip_prefix("qwen3_") {
+                stripped.to_string()
+            } else {
+                voice_id.clone()
+            };
+            format!("{} (Qwen3)", name_part)
+        } else {
+            let raw_name = voice_id.split('_').last().unwrap_or(&voice_id);
+            format!("{} (Kokoro)",
+                raw_name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()
+                    + &raw_name[1..]
+            )
+        };
 
-            token_key.set_value("", &display_name).map_err(|e| e.to_string())?;
-            token_key.set_value("CLSID", &clsid).map_err(|e| e.to_string())?;
-            token_key.set_value("VoiceLinkVoiceId", &voice_id).map_err(|e| e.to_string())?;
-            token_key.set_value("VoiceLinkServerPort", &"7860").map_err(|e| e.to_string())?;
+        // Check for existing custom name (from rename)
+        let existing_name: Option<String> = {
+            let first_root = token_roots[0];
+            let check_path = format!("{}\\{}", first_root, token_name);
+            hklm.open_subkey_with_flags(&check_path, KEY_READ)
+                .ok()
+                .and_then(|k| k.get_value::<String, _>("").ok())
+                .filter(|n| !n.is_empty())
+        };
+        let final_name = existing_name.unwrap_or(display_name);
 
-            let attrs_path = format!("{}\\Attributes", token_path);
-            let (attrs_key, _) = hklm
-                .create_subkey_with_flags(&attrs_path, KEY_WRITE)
-                .map_err(|e| format!("Failed to create attrs key: {}", e))?;
+        if has_access {
+            // Direct write path
+            for root in &token_roots {
+                let token_path = format!("{}\\{}", root, token_name);
+                let (token_key, _) = hklm
+                    .create_subkey_with_flags(&token_path, KEY_WRITE)
+                    .map_err(|e| format!("Failed to create token key: {}", e))?;
 
-            attrs_key.set_value("Name", &display_name).map_err(|e| e.to_string())?;
-            attrs_key.set_value("Gender", &gender).map_err(|e| e.to_string())?;
-            attrs_key.set_value("Language", &lang).map_err(|e| e.to_string())?;
-            attrs_key.set_value("Age", &"Adult").map_err(|e| e.to_string())?;
-            attrs_key.set_value("Vendor", &"VoiceLink").map_err(|e| e.to_string())?;
+                token_key.set_value("", &final_name).map_err(|e| e.to_string())?;
+                token_key.set_value("CLSID", &clsid).map_err(|e| e.to_string())?;
+                token_key.set_value("VoiceLinkVoiceId", &voice_id).map_err(|e| e.to_string())?;
+                token_key.set_value("VoiceLinkServerPort", &"7860").map_err(|e| e.to_string())?;
+                token_key.set_value("VoiceLinkModel", &model_name).map_err(|e| e.to_string())?;
+
+                let attrs_path = format!("{}\\Attributes", token_path);
+                let (attrs_key, _) = hklm
+                    .create_subkey_with_flags(&attrs_path, KEY_WRITE)
+                    .map_err(|e| format!("Failed to create attrs key: {}", e))?;
+
+                attrs_key.set_value("Name", &final_name).map_err(|e| e.to_string())?;
+                attrs_key.set_value("Gender", &gender).map_err(|e| e.to_string())?;
+                attrs_key.set_value("Language", &lang).map_err(|e| e.to_string())?;
+                attrs_key.set_value("Age", &"Adult").map_err(|e| e.to_string())?;
+                attrs_key.set_value("Vendor", &"VoiceLink").map_err(|e| e.to_string())?;
+            }
+        } else {
+            // Elevate: build PowerShell reg commands
+            let safe_name = final_name.replace('\'', "''");
+            let safe_vid = voice_id.replace('\'', "''");
+            let mut ps_cmds = Vec::new();
+            for root in &token_roots {
+                let reg_path = format!("HKLM:\\{}\\{}", root, token_name);
+                let attrs_path = format!("{}\\Attributes", reg_path);
+                ps_cmds.push(format!("New-Item -Path '{}' -Force | Out-Null", reg_path));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name '(Default)' -Value '{}'", reg_path, safe_name));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'CLSID' -Value '{}'", reg_path, clsid));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'VoiceLinkVoiceId' -Value '{}'", reg_path, safe_vid));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'VoiceLinkServerPort' -Value '7860'", reg_path));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'VoiceLinkModel' -Value '{}'", reg_path, model_name));
+                ps_cmds.push(format!("New-Item -Path '{}' -Force | Out-Null", attrs_path));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Name' -Value '{}'", attrs_path, safe_name));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Gender' -Value '{}'", attrs_path, gender));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Language' -Value '{}'", attrs_path, lang));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Age' -Value 'Adult'", attrs_path));
+                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Vendor' -Value 'VoiceLink'", attrs_path));
+            }
+            run_elevated_powershell(&ps_cmds.join("; "))?;
         }
     } else {
-        // Remove voice token from both registries
-        for root in &token_roots {
-            // Delete recursively (token + Attributes subkey)
-            if let Ok(tokens_key) = hklm.open_subkey_with_flags(root, KEY_WRITE) {
-                let _ = tokens_key.delete_subkey_all(&token_name);
+        // Remove voice token
+        if has_access {
+            for root in &token_roots {
+                if let Ok(tokens_key) = hklm.open_subkey_with_flags(root, KEY_WRITE) {
+                    let _ = tokens_key.delete_subkey_all(&token_name);
+                }
             }
+        } else {
+            let mut ps_cmds = Vec::new();
+            for root in &token_roots {
+                let reg_path = format!("HKLM:\\{}\\{}", root, token_name);
+                ps_cmds.push(format!(
+                    "if (Test-Path '{}') {{ Remove-Item -Path '{}' -Recurse -Force }}",
+                    reg_path, reg_path
+                ));
+            }
+            run_elevated_powershell(&ps_cmds.join("; "))?;
         }
     }
 
     Ok(())
+}
+
+// ============================================================================
+// Qwen3 Commands — Voice Studio API proxies
+// ============================================================================
+
+/// Get list of Qwen3 speakers (built-in + custom)
+#[tauri::command]
+async fn qwen3_list_speakers() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get("http://127.0.0.1:7860/v1/qwen3/speakers")
+        .send()
+        .await
+        .map_err(|e| format!("Server not reachable: {}", e))?;
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(json)
+}
+
+/// Delete a cloned voice profile from the server
+#[tauri::command]
+async fn qwen3_delete_clone(voice_id: String) -> Result<(), String> {
+    // Extract the profile name from voice_id ("qwen3_custom_Name" -> "Name")
+    let profile_name = voice_id
+        .strip_prefix("qwen3_custom_")
+        .unwrap_or(&voice_id);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .delete(format!("http://127.0.0.1:7860/v1/qwen3/clone/{}", profile_name))
+        .send()
+        .await
+        .map_err(|e| format!("Server error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Delete failed: {}", body));
+    }
+    Ok(())
+}
+
+/// Clone a voice via Qwen3 — uploads reference audio + transcript to server
+#[tauri::command]
+async fn qwen3_clone_voice(
+    name: String,
+    transcript: String,
+    audio_data: Vec<u8>,
+    audio_filename: String,
+    gender: String,
+    description: String,
+    preview_text: String,
+) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Detect MIME type from extension
+    let mime = match audio_filename.rsplit('.').next().unwrap_or("wav").to_lowercase().as_str() {
+        "mp3" => "audio/mpeg",
+        "m4a" | "mp4" | "aac" => "audio/mp4",
+        "ogg" | "oga" => "audio/ogg",
+        "flac" => "audio/flac",
+        "webm" => "audio/webm",
+        _ => "audio/wav",
+    };
+
+    let audio_part = reqwest::multipart::Part::bytes(audio_data)
+        .file_name(audio_filename)
+        .mime_str(mime)
+        .map_err(|e| e.to_string())?;
+
+    let form = reqwest::multipart::Form::new()
+        .text("name", name)
+        .text("transcript", transcript)
+        .text("gender", gender)
+        .text("description", description)
+        .text("preview_text", preview_text)
+        .part("audio", audio_part);
+
+    let resp = client
+        .post("http://127.0.0.1:7860/v1/qwen3/clone")
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Server error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Clone failed ({}): {}", status, body));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    Ok(bytes.to_vec())
+}
+
+/// Design a voice via Qwen3 from a text description (1.7B only)
+#[tauri::command]
+async fn qwen3_design_voice(
+    name: String,
+    description: String,
+    sample_text: String,
+) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let body = serde_json::json!({
+        "name": name,
+        "description": description,
+        "sample_text": sample_text,
+    });
+
+    let resp = client
+        .post("http://127.0.0.1:7860/v1/qwen3/design")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Server error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Design failed ({}): {}", status, body));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    Ok(bytes.to_vec())
+}
+
+/// Preview a Qwen3 voice (built-in or custom) by synthesizing text
+#[tauri::command]
+async fn qwen3_preview_voice(voice_id: String, text: String) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let body = serde_json::json!({
+        "text": text,
+        "voice": voice_id,
+        "speed": 1.0,
+    });
+
+    let resp = client
+        .post("http://127.0.0.1:7860/v1/qwen3/tts")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Server error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Qwen3 TTS failed ({}): {}", status, body));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    Ok(bytes.to_vec())
+}
+
+/// Narrate long text with Qwen3 TTS — supports language selection
+#[tauri::command]
+async fn qwen3_narrate(voice_id: String, text: String, language: String, speed: f64) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let body = serde_json::json!({
+        "text": text,
+        "voice": voice_id,
+        "speed": speed,
+        "language": language,
+    });
+
+    let resp = client
+        .post("http://127.0.0.1:7860/v1/qwen3/tts")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Server error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Qwen3 narration failed ({}): {}", status, body));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    Ok(bytes.to_vec())
+}
+
+/// Get Qwen3 model status (loaded, tier, idle time)
+#[tauri::command]
+async fn qwen3_get_status() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get("http://127.0.0.1:7860/v1/qwen3/status")
+        .send()
+        .await
+        .map_err(|e| format!("Server not reachable: {}", e))?;
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(json)
 }
 
 // ============================================================================
@@ -694,6 +1178,7 @@ async fn setup_run_command(
     args: Vec<String>,
     step_name: String,
     env: Option<std::collections::HashMap<String, String>>,
+    cwd: Option<String>,
 ) -> Result<String, String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -721,8 +1206,22 @@ async fn setup_run_command(
         }
     }
 
+    // Set working directory if specified
+    if let Some(ref dir) = cwd {
+        cmd.current_dir(dir);
+    }
+
     let mut child = cmd.spawn()
         .map_err(|e| format!("Failed to run {}: {}", program, e))?;
+
+    // Store PID for qwen3 downloads so they can be cancelled/paused
+    if step_name.starts_with("qwen3") {
+        if let Some(pid) = child.id() {
+            if let Ok(mut dl) = app.state::<Mutex<DownloadPid>>().lock() {
+                dl.0 = Some(pid);
+            }
+        }
+    }
 
     // Read stdout and stderr line-by-line, emitting progress events
     // so the frontend shows real-time status during long pip installs.
@@ -777,6 +1276,13 @@ async fn setup_run_command(
     let status = child.wait().await
         .map_err(|e| format!("Failed to wait for {}: {}", program, e))?;
 
+    // Clear download PID
+    if step_name.starts_with("qwen3") {
+        if let Ok(mut dl) = app.state::<Mutex<DownloadPid>>().lock() {
+            dl.0 = None;
+        }
+    }
+
     let stdout = stdout_task.await.unwrap_or_default();
     let stderr = stderr_task.await.unwrap_or_default();
 
@@ -793,6 +1299,29 @@ async fn setup_run_command(
         Ok(stdout)
     } else {
         Err(format!("Command failed:\nstdout: {}\nstderr: {}", stdout, stderr))
+    }
+}
+
+/// Cancel/pause the currently running Qwen3 download process.
+/// Uses taskkill /T to also terminate child processes (pip, snapshot_download).
+/// Since huggingface_hub caches partial downloads, re-running will resume.
+#[tauri::command]
+fn cancel_qwen3_download(app: AppHandle) -> Result<(), String> {
+    let pid = {
+        let dl = app.state::<Mutex<DownloadPid>>();
+        let mut guard = dl.lock().map_err(|e| e.to_string())?;
+        guard.0.take()
+    };
+
+    if let Some(pid) = pid {
+        // Kill the process tree (the download spawns child processes)
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(0x08000000)
+            .output();
+        Ok(())
+    } else {
+        Err("No download process running".to_string())
     }
 }
 
@@ -974,6 +1503,9 @@ fn get_settings(config: tauri::State<'_, Mutex<AppConfig>>) -> Result<serde_json
         "data_dir": cfg.data_dir,
         "server_port": cfg.server_port,
         "auto_start": cfg.auto_start,
+        "qwen3_enabled": cfg.qwen3_enabled,
+        "qwen3_model_tier": cfg.qwen3_model_tier,
+        "qwen3_installed": cfg.qwen3_installed,
     }))
 }
 
@@ -983,6 +1515,9 @@ fn save_settings(
     app: AppHandle,
     server_port: Option<u16>,
     auto_start: Option<bool>,
+    qwen3_enabled: Option<bool>,
+    qwen3_model_tier: Option<String>,
+    qwen3_installed: Option<bool>,
 ) -> Result<(), String> {
     let config = app.state::<Mutex<AppConfig>>();
     let mut cfg = config.lock().map_err(|e| e.to_string())?;
@@ -995,6 +1530,16 @@ fn save_settings(
         cfg.auto_start = auto;
         // Sync with registry (drop lock first is not needed — set_autostart_inner)
         set_autostart_inner(auto)?;
+    }
+
+    if let Some(enabled) = qwen3_enabled {
+        cfg.qwen3_enabled = enabled;
+    }
+    if let Some(tier) = qwen3_model_tier {
+        cfg.qwen3_model_tier = tier;
+    }
+    if let Some(installed) = qwen3_installed {
+        cfg.qwen3_installed = installed;
     }
 
     cfg.save()?;
@@ -1214,14 +1759,24 @@ pub fn run() {
         .manage(Mutex::new(ServerProcess(None)))
         .manage(Mutex::new(ServerManagedByUs(false)))
         .manage(Mutex::new(AppConfig::load()))
+        .manage(Mutex::new(DownloadPid(None)))
         .invoke_handler(tauri::generate_handler![
             get_server_status,
             get_sapi_status,
+            check_gpu,
             get_voices,
             get_registered_voice_ids,
             rename_voice,
             toggle_voice,
             preview_voice,
+            qwen3_list_speakers,
+            qwen3_clone_voice,
+            qwen3_delete_clone,
+            qwen3_design_voice,
+            qwen3_preview_voice,
+            qwen3_narrate,
+            qwen3_get_status,
+            cancel_qwen3_download,
             get_setup_status,
             get_setup_paths,
             set_data_dir,

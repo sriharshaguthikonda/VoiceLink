@@ -114,9 +114,10 @@ Everything runs on your computer. No internet needed after the initial setup. No
 ### What You Need
 
 - Windows 10 or 11 (64 bit)
-- About 1.5 GB of free disk space
+- About 1.5 GB of free disk space (+ ~3 GB for Qwen3 TTS if enabled)
 - An internet connection for the first setup (to download the AI model)
 - A reasonably modern computer (a dedicated GPU helps but is not required)
+- **For Qwen3 voices / voice cloning:** An NVIDIA GPU with at least 4 GB VRAM
 
 ### Installation
 
@@ -147,7 +148,9 @@ No terminal commands. No configuration files. No Python installation. Just insta
 
 ## 🗣️ All Available Voices
 
-VoiceLink ships with **11 voices** powered by the [Kokoro](https://github.com/hexgrad/kokoro) model:
+VoiceLink ships with **11 voices** powered by the [Kokoro](https://github.com/hexgrad/kokoro) model, plus **6 additional voices** and **voice cloning** through [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) (requires NVIDIA GPU):
+
+### Kokoro Voices
 
 | Voice | Accent | Gender | Description |
 |:------|:-------|:-------|:------------|
@@ -163,6 +166,19 @@ VoiceLink ships with **11 voices** powered by the [Kokoro](https://github.com/he
 | George | 🇬🇧 British | Male | Traditional British English |
 | Lewis | 🇬🇧 British | Male | Warm British voice |
 
+### Qwen3 Voices (GPU only, optional)
+
+| Voice | Gender | Description |
+|:------|:-------|:------------|
+| Serena | Female | Warm and gentle |
+| Vivian | Female | Bright and expressive |
+| Aiden | Male | Clear American midrange |
+| Ryan | Male | Dynamic with strong rhythm |
+| Dylan | Male | Youthful and natural |
+| Eric | Male | Lively with bright timbre |
+
+Plus **voice cloning**: clone any voice from a 3-second audio clip. Qwen3-TTS is accelerated with CUDA graphs via [faster-qwen3-tts](https://github.com/andimarafioti/faster-qwen3-tts) for ~1x realtime generation.
+
 More voices and additional AI models are planned for future releases.
 
 <br>
@@ -173,9 +189,10 @@ VoiceLink is functional and usable today. Here is where things stand:
 
 | Component | Status | Details |
 |:----------|:------:|:--------|
-| AI Voice Server | ✅ | Local server powered by Kokoro with 11 voices and GPU acceleration |
+| AI Voice Server | ✅ | Local server powered by Kokoro (11 voices) and Qwen3-TTS (6 voices + voice cloning) |
+| Qwen3-TTS Engine | ✅ | Optional GPU-accelerated engine with CUDA graphs (~1x realtime on RTX 4060) |
 | Windows Voice Driver | ✅ | Registered as a standard Windows voice, works in any compatible app |
-| Desktop App | ✅ | Dashboard, voice manager, system tray, server controls |
+| Desktop App | ✅ | Dashboard, voice manager, voice studio (clone voices), system tray, server controls |
 | Installer | ✅ | Setup wizard that downloads and configures everything automatically |
 | CI/CD Pipeline | ✅ | Automated builds and releases through GitHub Actions |
 

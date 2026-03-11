@@ -39,11 +39,11 @@
 // This makes VoiceLink gracefully degrade: the app just hears nothing
 // instead of getting an error dialog or crashing.
 // ============================================================================
-static constexpr int MAX_RETRIES = 3;              // Total attempts
-static constexpr DWORD RETRY_DELAY_MS = 500;       // Wait between retries
-static constexpr DWORD CONNECT_TIMEOUT_MS = 2000;  // TCP connect timeout
-static constexpr DWORD SEND_TIMEOUT_MS = 5000;     // Time to send request
-static constexpr DWORD RECEIVE_TIMEOUT_MS = 30000; // Time waiting for response headers
+static constexpr int MAX_RETRIES = 3;               // Total attempts
+static constexpr DWORD RETRY_DELAY_MS = 500;        // Wait between retries
+static constexpr DWORD CONNECT_TIMEOUT_MS = 2000;   // TCP connect timeout
+static constexpr DWORD SEND_TIMEOUT_MS = 5000;      // Time to send request
+static constexpr DWORD RECEIVE_TIMEOUT_MS = 120000; // Time waiting for response headers (Qwen3 can take 60s+)
 
 // ============================================================================
 // TtsHttpClient Implementation
@@ -140,7 +140,8 @@ HRESULT TtsHttpClient::StreamSynthesize(
     DWORD jsonBodyLen,
     const std::function<HRESULT(const BYTE *data, DWORD size)> &onChunk,
     const std::function<bool()> &checkAbort,
-    ULONGLONG *pTotalAudioBytes)
+    ULONGLONG *pTotalAudioBytes,
+    const wchar_t *endpoint)
 {
     if (!m_hConnect)
     {
@@ -173,7 +174,7 @@ HRESULT TtsHttpClient::StreamSynthesize(
         }
 
         lastHr = StreamSynthesizeOnce(jsonBody, jsonBodyLen, onChunk,
-                                      checkAbort, pTotalAudioBytes);
+                                      checkAbort, pTotalAudioBytes, endpoint);
 
         // Success or user abort: stop retrying
         if (SUCCEEDED(lastHr) || lastHr == E_ABORT)
@@ -198,7 +199,8 @@ HRESULT TtsHttpClient::StreamSynthesizeOnce(
     DWORD jsonBodyLen,
     const std::function<HRESULT(const BYTE *data, DWORD size)> &onChunk,
     const std::function<bool()> &checkAbort,
-    ULONGLONG *pTotalAudioBytes)
+    ULONGLONG *pTotalAudioBytes,
+    const wchar_t *endpoint)
 {
 
     // -----------------------------------------------------------------------
@@ -213,7 +215,7 @@ HRESULT TtsHttpClient::StreamSynthesizeOnce(
     HINTERNET hRequest = WinHttpOpenRequest(
         m_hConnect,                   // Connection handle
         L"POST",                      // HTTP method
-        L"/v1/tts",                   // URL path
+        endpoint,                     // URL path (e.g. /v1/tts or /v1/qwen3/tts)
         nullptr,                      // HTTP version (nullptr = HTTP/1.1)
         WINHTTP_NO_REFERER,           // Referrer (none)
         WINHTTP_DEFAULT_ACCEPT_TYPES, // Accept types (*/*)

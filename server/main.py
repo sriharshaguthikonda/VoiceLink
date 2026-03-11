@@ -21,9 +21,32 @@
 # The model stays in memory for the entire lifetime of the server.
 # ============================================================================
 
+import os
 import sys
 import time
+import logging
+import warnings
 from contextlib import asynccontextmanager
+
+# Suppress noisy third-party warnings before any imports trigger them
+# 1) sox package uses Python logging to warn about missing SoX binary
+logging.getLogger("sox").setLevel(logging.CRITICAL)
+# 2) sox __init__ runs `os.popen('sox -h')` which writes to stderr via shell;
+#    force-import sox early with stderr suppressed so later faster-qwen3-tts gets cached module
+_real_stderr_fd = os.dup(2)
+_devnull_fd = os.open(os.devnull, os.O_WRONLY)
+os.dup2(_devnull_fd, 2)
+try:
+    import sox  # noqa: F401 — cached for faster-qwen3-tts later
+except Exception:
+    pass
+os.dup2(_real_stderr_fd, 2)
+os.close(_real_stderr_fd)
+os.close(_devnull_fd)
+# 3) flash-attn / transformers advisory warnings
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+warnings.filterwarnings("ignore", message=".*flash.attn.*")
+warnings.filterwarnings("ignore", message=".*Torch was not compiled with flash attention.*")
 
 from fastapi import FastAPI
 from loguru import logger
@@ -31,6 +54,7 @@ from loguru import logger
 from server.config import settings
 from server.models import load_model
 from server.routers.tts import router as tts_router, set_model, set_start_time
+from server.routers.qwen3 import router as qwen3_router
 
 
 def setup_logging():
@@ -79,6 +103,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Host:  {settings.server.host}")
     logger.info(f"Port:  {settings.server.port}")
     logger.info(f"Model: {settings.model.default_model}")
+    if settings.model.qwen3_enabled:
+        logger.info(f"Qwen3: enabled (tier={settings.model.qwen3_tier}, lazy-loaded)")
+    else:
+        logger.info("Qwen3: disabled")
 
     # Load the TTS model
     t0 = time.perf_counter()
@@ -123,6 +151,11 @@ app = FastAPI(
 
 # Mount routers
 app.include_router(tts_router)
+
+# Qwen3 router is always mounted — the router itself handles lazy loading.
+# If Qwen3 is disabled, requests will still fail gracefully because the model
+# won't be installed. This avoids conditional import issues.
+app.include_router(qwen3_router)
 
 
 # --- Direct execution ---

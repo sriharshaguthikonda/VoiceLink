@@ -9,11 +9,21 @@
 from server.models.base import TTSModel, VoiceInfo
 from server.models.kokoro_model import KokoroModel
 
+# Qwen3 import is deferred — only imported when needed (lazy loading).
+# This avoids pulling in torch/CUDA at startup when only Kokoro is used.
+
 # --- Model Registry ---
 # Maps model name → class. Add new models here.
 MODEL_REGISTRY: dict[str, type[TTSModel]] = {
     "kokoro": KokoroModel,
+    # "qwen3" is handled specially via get_qwen3_model() for lazy loading
 }
+
+
+def get_qwen3_class() -> type[TTSModel]:
+    """Lazy import of Qwen3Model to avoid loading torch/CUDA at startup."""
+    from server.models.qwen3_model import Qwen3Model
+    return Qwen3Model
 
 
 def load_model(model_name: str, **kwargs) -> TTSModel:

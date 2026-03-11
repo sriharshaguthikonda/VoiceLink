@@ -50,6 +50,8 @@ VoiceLinkEngine::VoiceLinkEngine()
       ,
       m_pToken(nullptr), m_voiceId("af_heart") // Default voice if token doesn't specify
       ,
+      m_model("kokoro") // Default model backend
+      ,
       m_serverPort(7860) // Default port
       ,
       m_initialized(false)
@@ -202,6 +204,27 @@ STDMETHODIMP VoiceLinkEngine::SetObjectToken(ISpObjectToken *pToken)
     {
         m_serverPort = static_cast<INTERNET_PORT>(_wtoi(portW.c_str()));
         VLOG(L"Server port from token: %d", m_serverPort);
+    }
+
+    // Model backend: "kokoro" (default) or "qwen3"
+    std::wstring modelW = ReadTokenAttribute(L"VoiceLinkModel");
+    if (!modelW.empty())
+    {
+        m_model = WideToUtf8(modelW.c_str());
+        VLOG(L"Model from token: %s", modelW.c_str());
+    }
+    else
+    {
+        // Infer model from voice ID prefix
+        if (m_voiceId.substr(0, 5) == "qwen3")
+        {
+            m_model = "qwen3";
+            VLOG(L"Inferred model=qwen3 from voice ID prefix");
+        }
+        else
+        {
+            VLOG(L"No VoiceLinkModel in token, using default: kokoro");
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -489,6 +512,11 @@ STDMETHODIMP VoiceLinkEngine::Speak(
     // -----------------------------------------------------------------------
     std::string jsonBody = BuildTtsRequestJson(textUtf8, m_voiceId, speed);
 
+    // Choose endpoint based on model backend
+    // Kokoro: /v1/tts (the original endpoint)
+    // Qwen3:  /v1/qwen3/tts (the Qwen3-specific endpoint)
+    const wchar_t *endpoint = (m_model == "qwen3") ? L"/v1/qwen3/tts" : L"/v1/tts";
+
     // -----------------------------------------------------------------------
     // Step 4: Send to server and stream audio back
     //
@@ -671,7 +699,8 @@ STDMETHODIMP VoiceLinkEngine::Speak(
 
             return false;
         },
-        &serverAudioBytes);
+        &serverAudioBytes,
+        endpoint);
 
     // Flush any remaining word-boundary events whose estimated offset
     // exceeded the actual audio length (our estimate was too high).

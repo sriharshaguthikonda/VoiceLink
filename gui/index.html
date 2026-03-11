@@ -64,6 +64,46 @@
           </svg>
           <span>Settings</span>
         </li>
+        <li
+          class="nav-item hidden"
+          id="nav-voice-studio"
+          data-page="voice-studio"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="20"
+            height="20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M9 18V5l12-2v13" />
+            <circle cx="6" cy="18" r="3" />
+            <circle cx="18" cy="16" r="3" />
+          </svg>
+          <span>Voice Studio</span>
+        </li>
+        <li
+          class="nav-item hidden"
+          id="nav-narrate"
+          data-page="narrate"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="20"
+            height="20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+            <line x1="8" y1="7" x2="16" y2="7" />
+            <line x1="8" y1="11" x2="16" y2="11" />
+            <line x1="8" y1="15" x2="12" y2="15" />
+          </svg>
+          <span>Narrate</span>
+        </li>
         <li class="nav-item" data-page="setup">
           <svg
             viewBox="0 0 24 24"
@@ -210,11 +250,340 @@ Hello! VoiceLink is ready.</textarea
             </div>
           </div>
         </div>
+
+        <!-- Qwen3 TTS section — only visible when CUDA GPU detected -->
+        <div id="qwen3-settings" class="card hidden">
+          <div class="card-header">
+            <h3>Qwen3 TTS</h3>
+            <span id="qwen3-status-badge" class="badge badge-muted"
+              >Checking GPU...</span
+            >
+          </div>
+          <div class="card-body settings-form">
+            <div id="qwen3-gpu-info" class="qwen3-gpu-info">
+              <span class="label">GPU</span>
+              <span id="qwen3-gpu-name" class="value">Detecting...</span>
+            </div>
+            <div id="qwen3-vram-info" class="qwen3-gpu-info">
+              <span class="label">VRAM</span>
+              <span id="qwen3-vram" class="value">&mdash;</span>
+            </div>
+            <div class="setting-row">
+              <label>Enable Qwen3 TTS</label>
+              <label class="switch">
+                <input type="checkbox" id="setting-qwen3-enabled" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div id="qwen3-details" class="qwen3-details hidden">
+              <div class="setting-row">
+                <label>Model tier</label>
+                <select id="setting-qwen3-tier">
+                  <option value="standard">
+                    Standard (0.6B) ~ 3 GB download
+                  </option>
+                  <option value="full">Full (1.7B) ~ 10 GB download</option>
+                </select>
+              </div>
+              <div id="qwen3-tier-desc" class="tier-description">
+                <p id="qwen3-tier-text">
+                  9 built-in voices + voice cloning. Needs ~2 GB VRAM.
+                </p>
+              </div>
+              <div id="qwen3-download-section" class="qwen3-download-section">
+                <button id="btn-download-qwen3" class="btn btn-primary">
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="16"
+                    height="16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  Download Qwen3 Models
+                </button>
+                <div class="step-progress hidden" id="progress-qwen3">
+                  <div class="progress-bar">
+                    <div class="progress-fill" id="fill-qwen3"></div>
+                  </div>
+                  <span class="progress-text" id="text-qwen3">0%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-header"><h3>About</h3></div>
           <div class="card-body">
             <p>VoiceLink v0.1.0</p>
             <p class="muted">Neural TTS for Windows SAPI</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Voice Studio Page (hidden until Qwen3 enabled + installed) -->
+      <section id="page-voice-studio" class="page">
+        <h1>Voice Studio</h1>
+        <p class="setup-subtitle">
+          Create custom voices using Qwen3 TTS. Clone a voice from audio or
+          design one from a text description.
+        </p>
+
+        <div class="studio-tabs">
+          <button class="studio-tab active" data-tab="clone">
+            Clone a Voice
+          </button>
+          <button class="studio-tab" data-tab="design">Design a Voice</button>
+          <button class="studio-tab" data-tab="builtin">Qwen3 Voices</button>
+        </div>
+
+        <!-- Clone Tab -->
+        <div id="studio-clone" class="studio-panel active">
+          <div class="card">
+            <div class="card-header"><h3>Clone a Voice</h3></div>
+            <div class="card-body">
+              <p class="muted">
+                Upload a short audio clip of someone speaking. Qwen3 will learn
+                their voice characteristics and create a new TTS voice. Supports
+                WAV, MP3, M4A, FLAC, OGG, and more.
+              </p>
+              <div class="clone-form">
+                <div class="setting-row">
+                  <label>Voice name</label>
+                  <input type="text" id="clone-name" placeholder="My Voice" />
+                </div>
+                <div class="setting-row">
+                  <label>Gender</label>
+                  <select id="clone-gender">
+                    <option value="female">Female</option>
+                    <option value="male">Male</option>
+                    <option value="unknown">Other / Unknown</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <label>Reference audio (3s+)</label>
+                  <input type="file" id="clone-audio" accept="audio/*" />
+                </div>
+                <div class="setting-row">
+                  <label>What is said in the audio</label>
+                  <input
+                    type="text"
+                    id="clone-transcript"
+                    placeholder="The exact words spoken in the audio..."
+                  />
+                </div>
+                <div class="setting-row">
+                  <label>Description (optional)</label>
+                  <input
+                    type="text"
+                    id="clone-description"
+                    placeholder="e.g. Warm, deep male narrator voice"
+                  />
+                </div>
+                <div class="clone-actions">
+                  <button id="btn-clone-create" class="btn btn-accent" disabled>
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="16"
+                      height="16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"
+                      />
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                      <line x1="12" y1="19" x2="12" y2="23" />
+                      <line x1="8" y1="23" x2="16" y2="23" />
+                    </svg>
+                    Clone Voice
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Temp cloned voices appear here -->
+          <div id="clone-temp-voices" class="clone-temp-voices"></div>
+        </div>
+
+        <!-- Design Tab -->
+        <div id="studio-design" class="studio-panel">
+          <div class="card">
+            <div class="card-header">
+              <h3>Design a Voice</h3>
+              <span class="badge badge-accent">1.7B only</span>
+            </div>
+            <div class="card-body">
+              <p class="muted">
+                Describe the voice you want and Qwen3 will generate it. Requires
+                the Full (1.7B) model tier.
+              </p>
+              <div class="design-form">
+                <div class="setting-row">
+                  <label>Voice name</label>
+                  <input
+                    type="text"
+                    id="design-name"
+                    placeholder="My Designed Voice"
+                  />
+                </div>
+                <div class="setting-row">
+                  <label>Description</label>
+                  <textarea
+                    id="design-description"
+                    rows="3"
+                    placeholder="A warm female voice with a slight British accent, speaks calmly and clearly..."
+                  ></textarea>
+                </div>
+                <div class="clone-actions">
+                  <button
+                    id="btn-design-generate"
+                    class="btn btn-secondary"
+                    disabled
+                  >
+                    Generate
+                  </button>
+                  <button id="btn-design-save" class="btn btn-primary" disabled>
+                    Save to Library
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Built-in Qwen3 Voices Tab -->
+        <div id="studio-builtin" class="studio-panel">
+          <div class="card">
+            <div class="card-header"><h3>Built-in Qwen3 Voices</h3></div>
+            <div class="card-body">
+              <p class="muted">
+                9 built-in voices from Qwen3 TTS. Enable them to make them
+                available as SAPI voices.
+              </p>
+              <div id="qwen3-voices-list" class="voices-grid">
+                <p class="placeholder">Loading...</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Narrate Page -->
+      <section id="page-narrate" class="page">
+        <h1>Narrate</h1>
+        <p class="setup-subtitle">
+          Generate full narrations from scripts, essays, or any long text.
+          Paste text or upload a file, pick a voice and language, then generate.
+        </p>
+
+        <div class="card">
+          <div class="card-header"><h3>Generate Narration</h3></div>
+          <div class="card-body">
+            <div class="narrate-controls">
+              <div class="setting-row">
+                <label for="narrate-voice">Voice</label>
+                <select id="narrate-voice"></select>
+              </div>
+              <div class="setting-row">
+                <label for="narrate-language">Language</label>
+                <select id="narrate-language">
+                  <option value="auto">Auto-detect</option>
+                  <option value="english" selected>English</option>
+                  <option value="chinese">Chinese</option>
+                  <option value="japanese">Japanese</option>
+                  <option value="korean">Korean</option>
+                  <option value="french">French</option>
+                  <option value="german">German</option>
+                  <option value="italian">Italian</option>
+                  <option value="spanish">Spanish</option>
+                  <option value="portuguese">Portuguese</option>
+                  <option value="russian">Russian</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label for="narrate-speed">Speed</label>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <input type="range" id="narrate-speed" min="0.25" max="4.0" step="0.05" value="1.0" style="flex: 1;" />
+                  <span id="narrate-speed-label" style="min-width: 40px; text-align: right;">1.0×</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="setting-row" style="margin-top: 12px;">
+              <label for="narrate-file">Upload text file</label>
+              <input type="file" id="narrate-file" accept=".txt,.md,.text" />
+            </div>
+
+            <textarea
+              id="narrate-text"
+              rows="12"
+              placeholder="Paste your text here, or upload a file above..."
+              style="width: 100%; margin-top: 8px; resize: vertical; font-family: inherit; font-size: 14px;"
+            ></textarea>
+
+            <div id="narrate-char-count" class="muted" style="text-align: right; margin-top: 4px;">
+              0 / 50,000 characters
+            </div>
+
+            <div class="clone-actions" style="margin-top: 12px;">
+              <button id="btn-narrate-generate" class="btn btn-accent" disabled>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+                Generate Narration
+              </button>
+              <button id="btn-narrate-stop" class="btn btn-danger" style="display: none;">
+                Stop
+              </button>
+            </div>
+
+            <div id="narrate-progress" style="display: none; margin-top: 12px;">
+              <div class="stat-row">
+                <span class="label">Status</span>
+                <span id="narrate-status" class="value">Generating...</span>
+              </div>
+              <div style="background: var(--bg-input); border-radius: 4px; height: 6px; margin-top: 8px; overflow: hidden;">
+                <div id="narrate-progress-bar" style="background: var(--accent); height: 100%; width: 0%; transition: width 0.3s;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Result Card -->
+        <div id="narrate-result" class="card" style="display: none; margin-top: 16px;">
+          <div class="card-header">
+            <h3>Narration Result</h3>
+          </div>
+          <div class="card-body">
+            <div class="stat-row">
+              <span class="label">Duration</span>
+              <span id="narrate-duration" class="value">—</span>
+            </div>
+            <audio id="narrate-audio" controls style="width: 100%; margin-top: 12px;"></audio>
+            <div class="clone-actions" style="margin-top: 12px;">
+              <button id="btn-narrate-play" class="btn btn-primary">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+                Play
+              </button>
+              <button id="btn-narrate-download" class="btn btn-secondary">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Download WAV
+              </button>
+            </div>
           </div>
         </div>
       </section>

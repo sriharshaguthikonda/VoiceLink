@@ -24,6 +24,7 @@
 # ============================================================================
 
 import time
+import asyncio
 from typing import Generator
 
 from fastapi import APIRouter, HTTPException, Request
@@ -152,23 +153,19 @@ async def synthesize(request: TTSRequest):
 
     t0 = time.perf_counter()
 
-    # ---- Pre-generate all audio ----
-    # We collect all chunks first so we know the exact total byte count.
-    # This lets the COM DLL fire SPEI_WORD_BOUNDARY events at perfectly
-    # proportional audio offsets, giving Edge Read Aloud accurate text
-    # highlighting (no drift between highlighted word and spoken audio).
-    #
-    # The tradeoff: time-to-first-byte increases by the full synthesis
-    # time (~1-3s for a page of text). This is acceptable for reading
-    # apps where users expect a short pause before audio starts.
-    chunks: list[bytes] = []
-    try:
+    def _run_synthesis() -> list[bytes]:
+        """Run blocking synthesis in a thread so the event loop stays responsive."""
+        result: list[bytes] = []
         for chunk in _model.synthesize(
             text=request.text,
             voice=request.voice,
             speed=request.speed,
         ):
-            chunks.append(chunk)
+            result.append(chunk)
+        return result
+
+    try:
+        chunks = await asyncio.to_thread(_run_synthesis)
     except Exception as e:
         logger.exception(f"Synthesis error: {e}")
         raise HTTPException(status_code=500, detail=f"Synthesis failed: {e}")
