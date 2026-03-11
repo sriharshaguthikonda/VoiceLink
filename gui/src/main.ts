@@ -1825,16 +1825,47 @@ function setupNarratePage() {
     }
   });
 
-  // Download WAV
-  document.getElementById("btn-narrate-download")?.addEventListener("click", () => {
+  // Download WAV — native save dialog
+  document.getElementById("btn-narrate-download")?.addEventListener("click", async () => {
     if (!narratePcmData) return;
-    const wavBlob = pcmToWavBlob(narratePcmData, 24000);
-    const url = URL.createObjectURL(wavBlob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "narration.wav";
-    a.click();
-    URL.revokeObjectURL(url);
+    const btn = document.getElementById("btn-narrate-download") as HTMLButtonElement | null;
+    if (!btn) return;
+
+    btn.disabled = true;
+    const origHtml = btn.innerHTML;
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Saving...`;
+
+    try {
+      const savedPath = await invoke<string | null>("save_wav_file", {
+        pcmData: Array.from(narratePcmData),
+      });
+
+      if (savedPath) {
+        btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Saved!`;
+        btn.classList.remove("btn-secondary");
+        btn.classList.add("btn-success");
+        setTimeout(() => {
+          btn.innerHTML = origHtml;
+          btn.classList.remove("btn-success");
+          btn.classList.add("btn-secondary");
+        }, 3000);
+      } else {
+        // User cancelled the dialog
+        btn.innerHTML = origHtml;
+      }
+    } catch (e: any) {
+      console.error("Save failed:", e);
+      btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> Failed`;
+      btn.classList.remove("btn-secondary");
+      btn.classList.add("btn-danger");
+      setTimeout(() => {
+        btn.innerHTML = origHtml;
+        btn.classList.remove("btn-danger");
+        btn.classList.add("btn-secondary");
+      }, 3000);
+    } finally {
+      btn.disabled = false;
+    }
   });
 }
 

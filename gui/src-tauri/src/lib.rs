@@ -933,6 +933,51 @@ async fn qwen3_narrate(voice_id: String, text: String, language: String, speed: 
     Ok(bytes.to_vec())
 }
 
+/// Save PCM audio as a WAV file — shows a native Save dialog
+#[tauri::command]
+async fn save_wav_file(pcm_data: Vec<u8>) -> Result<Option<String>, String> {
+    // Show native save dialog
+    let file = rfd::AsyncFileDialog::new()
+        .set_title("Save Narration")
+        .set_file_name("narration.wav")
+        .add_filter("WAV Audio", &["wav"])
+        .save_file()
+        .await;
+
+    let handle = match file {
+        Some(h) => h,
+        None => return Ok(None), // User cancelled
+    };
+
+    let path = handle.path().to_owned();
+
+    // Build WAV from PCM: 16-bit mono 24kHz
+    let sample_rate: u32 = 24000;
+    let data_len = pcm_data.len() as u32;
+    let file_len = 36 + data_len;
+
+    let mut wav = Vec::with_capacity(44 + pcm_data.len());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&file_len.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());       // chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes());        // PCM format
+    wav.extend_from_slice(&1u16.to_le_bytes());        // mono
+    wav.extend_from_slice(&sample_rate.to_le_bytes()); // sample rate
+    wav.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+    wav.extend_from_slice(&2u16.to_le_bytes());        // block align
+    wav.extend_from_slice(&16u16.to_le_bytes());       // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.extend_from_slice(&pcm_data);
+
+    std::fs::write(&path, &wav)
+        .map_err(|e| format!("Failed to save WAV: {}", e))?;
+
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
 /// Get Qwen3 model status (loaded, tier, idle time)
 #[tauri::command]
 async fn qwen3_get_status() -> Result<serde_json::Value, String> {
@@ -1775,6 +1820,7 @@ pub fn run() {
             qwen3_design_voice,
             qwen3_preview_voice,
             qwen3_narrate,
+            save_wav_file,
             qwen3_get_status,
             cancel_qwen3_download,
             get_setup_status,
