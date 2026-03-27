@@ -25,7 +25,7 @@
 
 import time
 import asyncio
-from typing import Generator
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -153,36 +153,47 @@ async def synthesize(request: TTSRequest):
 
     t0 = time.perf_counter()
 
-    def _run_synthesis() -> list[bytes]:
-        """Run blocking synthesis in a thread so the event loop stays responsive."""
-        result: list[bytes] = []
-        for chunk in _model.synthesize(
-            text=request.text,
-            voice=request.voice,
-            speed=request.speed,
-        ):
-            result.append(chunk)
-        return result
+    # Bridge blocking model generation -> async StreamingResponse
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+    loop = asyncio.get_event_loop()
 
-    try:
-        chunks = await asyncio.to_thread(_run_synthesis)
-    except Exception as e:
-        logger.exception(f"Synthesis error: {e}")
-        raise HTTPException(status_code=500, detail=f"Synthesis failed: {e}")
+    async def _producer():
+        def _generate():
+            try:
+                for chunk in _model.synthesize(
+                    text=request.text,
+                    voice=request.voice,
+                    speed=request.speed,
+                ):
+                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            except Exception as e:
+                logger.exception(f"Synthesis error: {e}")
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
 
-    total_bytes = sum(len(c) for c in chunks)
-    elapsed = time.perf_counter() - t0
-    audio_seconds = total_bytes / (24000 * 2)  # 24kHz * 2 bytes/sample
-    logger.info(
-        f"TTS complete: {audio_seconds:.1f}s audio in {elapsed:.2f}s "
-        f"({audio_seconds / elapsed:.1f}x realtime), "
-        f"{total_bytes:,} bytes"
-    )
+        await asyncio.to_thread(_generate)
 
-    def stream_chunks() -> Generator[bytes, None, None]:
-        """Yield pre-generated PCM chunks."""
-        for chunk in chunks:
-            yield chunk
+    async def stream_chunks() -> AsyncGenerator[bytes, None]:
+        """Yield PCM chunks as soon as they are generated."""
+        total_bytes = 0
+        producer_task = asyncio.create_task(_producer())
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                total_bytes += len(chunk)
+                yield chunk
+        finally:
+            await producer_task
+
+        elapsed = time.perf_counter() - t0
+        audio_seconds = total_bytes / (24000 * 2)  # 24kHz * 2 bytes/sample
+        logger.info(
+            f"TTS complete: {audio_seconds:.1f}s audio in {elapsed:.2f}s "
+            f"({audio_seconds / max(elapsed, 0.001):.1f}x realtime), "
+            f"{total_bytes:,} bytes"
+        )
 
     # Return streaming response with audio length header for precise
     # word-boundary event timing in the COM DLL.
@@ -194,9 +205,6 @@ async def synthesize(request: TTSRequest):
             "X-Audio-Sample-Rate": "24000",
             "X-Audio-Sample-Width": "16",
             "X-Audio-Channels": "1",
-            # Exact total audio byte count — used by the DLL for
-            # proportional SPEI_WORD_BOUNDARY event offsets.
-            "X-Audio-Length": str(total_bytes),
         },
     )
 

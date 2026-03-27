@@ -13,9 +13,10 @@
 // ============================================================================
 
 use serde::{Deserialize, Serialize};
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::os::windows::process::CommandExt;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconEvent,
@@ -108,8 +109,7 @@ fn default_server_port() -> u16 {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let base = std::env::var("ProgramData")
-            .unwrap_or_else(|_| r"C:\ProgramData".to_string());
+        let base = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".to_string());
         Self {
             data_dir: PathBuf::from(base)
                 .join("VoiceLink")
@@ -127,8 +127,7 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Config file lives at a fixed location so we can always find it
     fn config_path() -> PathBuf {
-        let base = std::env::var("ProgramData")
-            .unwrap_or_else(|_| r"C:\ProgramData".to_string());
+        let base = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".to_string());
         PathBuf::from(base).join("VoiceLink").join("config.json")
     }
 
@@ -270,8 +269,8 @@ fn check_gpu() -> Result<GpuInfo, String> {
                     name: Some(name),
                     vram_total_mb: Some(total_mb),
                     vram_free_mb: Some(free_mb),
-                    can_run_standard: total_mb >= 2048,  // 0.6B needs ~2 GB total
-                    can_run_full: total_mb >= 6144,      // 1.7B needs ~5 GB; 6 GB total headroom
+                    can_run_standard: total_mb >= 2048, // 0.6B needs ~2 GB total
+                    can_run_full: total_mb >= 6144,     // 1.7B needs ~5 GB; 6 GB total headroom
                 })
             } else {
                 // nvidia-smi returned unexpected format
@@ -362,17 +361,45 @@ async fn get_voices(config: tauri::State<'_, Mutex<AppConfig>>) -> Result<Vec<Vo
             if let Ok(qwen3_voices) = qwen3_resp.json::<Vec<serde_json::Value>>().await {
                 for qv in qwen3_voices {
                     voices.push(VoiceInfo {
-                        id: qv.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        name: qv.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        language: qv.get("language").and_then(|v| v.as_str()).unwrap_or("en-US").to_string(),
-                        gender: qv.get("gender").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-                        description: qv.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        id: qv
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        name: qv
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        language: qv
+                            .get("language")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("en-US")
+                            .to_string(),
+                        gender: qv
+                            .get("gender")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        description: qv
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         model: "qwen3".to_string(),
-                        tags: qv.get("tags")
+                        tags: qv
+                            .get("tags")
                             .and_then(|v| v.as_array())
-                            .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
                             .unwrap_or_default(),
-                        sample_rate: qv.get("sample_rate").and_then(|v| v.as_u64()).unwrap_or(24000) as u32,
+                        sample_rate: qv
+                            .get("sample_rate")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(24000) as u32,
                     });
                 }
             }
@@ -427,10 +454,7 @@ fn rename_voice(voice_id: String, new_name: String) -> Result<(), String> {
 
     // Try direct HKLM write
     let has_access = hklm
-        .open_subkey_with_flags(
-            r"SOFTWARE\Microsoft\Speech\Voices\Tokens",
-            KEY_WRITE,
-        )
+        .open_subkey_with_flags(r"SOFTWARE\Microsoft\Speech\Voices\Tokens", KEY_WRITE)
         .is_ok();
 
     if has_access {
@@ -445,7 +469,8 @@ fn rename_voice(voice_id: String, new_name: String) -> Result<(), String> {
             let attrs_path = format!("{}\\Attributes", token_path);
             match hklm.open_subkey_with_flags(&attrs_path, KEY_SET_VALUE) {
                 Ok(key) => {
-                    key.set_value("Name", &new_name).map_err(|e| e.to_string())?;
+                    key.set_value("Name", &new_name)
+                        .map_err(|e| e.to_string())?;
                 }
                 Err(_) => {}
             }
@@ -462,7 +487,9 @@ fn rename_voice(voice_id: String, new_name: String) -> Result<(), String> {
             let attrs_path = format!("{}\\Attributes", reg_path);
             ps_cmds.push(format!(
                 "if (Test-Path '{}') {{ Set-ItemProperty -Path '{}' -Name 'Name' -Value '{}' }}",
-                attrs_path, attrs_path, new_name.replace('\'', "''")
+                attrs_path,
+                attrs_path,
+                new_name.replace('\'', "''")
             ));
         }
         run_elevated_powershell(&ps_cmds.join("; "))?;
@@ -505,9 +532,10 @@ fn get_registered_voice_ids() -> Result<Vec<String>, String> {
 
     // Clean up any stale HKCU entries from a previous version
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    if let Ok(tokens_key) = hkcu
-        .open_subkey_with_flags(r"SOFTWARE\Microsoft\Speech\Voices\Tokens", KEY_READ | KEY_WRITE)
-    {
+    if let Ok(tokens_key) = hkcu.open_subkey_with_flags(
+        r"SOFTWARE\Microsoft\Speech\Voices\Tokens",
+        KEY_READ | KEY_WRITE,
+    ) {
         let stale: Vec<String> = tokens_key
             .enum_keys()
             .filter_map(|r| r.ok())
@@ -537,21 +565,46 @@ fn get_registered_voice_ids() -> Result<Vec<String>, String> {
 /// Run a PowerShell command elevated via UAC prompt.
 /// Writes commands to a temp .ps1 file and runs it elevated to avoid quoting issues.
 fn run_elevated_powershell(commands: &str) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
+    use std::fs::OpenOptions;
     use std::io::Write;
+    use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    // Write commands to a temporary .ps1 script file
+    // Write commands to a unique temporary .ps1 script file
     let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join("voicelink_elevate.ps1");
+    let pid = std::process::id();
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+
+    let mut script_path: Option<PathBuf> = None;
+    let mut script_file: Option<std::fs::File> = None;
+    for attempt in 0..32 {
+        let candidate = temp_dir.join(format!("voicelink_elevate_{}_{}_{}.ps1", pid, ts, attempt));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                script_file = Some(file);
+                script_path = Some(candidate);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+
+    let script_path =
+        script_path.ok_or_else(|| "Failed to allocate temp script path".to_string())?;
     {
-        let mut f = std::fs::File::create(&script_path)
-            .map_err(|e| format!("Failed to create temp script: {}", e))?;
+        let mut f = script_file.ok_or_else(|| "Failed to create temp script file".to_string())?;
         f.write_all(commands.as_bytes())
             .map_err(|e| format!("Failed to write temp script: {}", e))?;
     }
 
-    let script_str = script_path.to_string_lossy().to_string();
+    let script_str = script_path.to_string_lossy().replace('\'', "''");
 
     // Use Start-Process to run the script elevated
     let status = std::process::Command::new("powershell")
@@ -559,7 +612,7 @@ fn run_elevated_powershell(commands: &str) -> Result<(), String> {
             "-NoProfile",
             "-Command",
             &format!(
-                "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"{}\"' -Verb RunAs -Wait",
+                "Start-Process -FilePath powershell -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','{}') -Verb RunAs -Wait",
                 script_str
             ),
         ])
@@ -577,12 +630,27 @@ fn run_elevated_powershell(commands: &str) -> Result<(), String> {
     }
 }
 
+fn validate_voice_id(voice_id: &str) -> Result<(), String> {
+    if voice_id.is_empty() || voice_id.len() > 128 {
+        return Err("Invalid voice ID length.".to_string());
+    }
+    if !voice_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err("Invalid voice ID. Allowed characters: A-Z, a-z, 0-9, _, -.".to_string());
+    }
+    Ok(())
+}
+
 /// Toggle a voice on/off in SAPI by adding/removing its registry token.
 /// Tries direct HKLM write first; if not admin, elevates via UAC prompt.
 #[tauri::command]
 fn toggle_voice(voice_id: String, enabled: bool) -> Result<(), String> {
     use winreg::enums::*;
     use winreg::RegKey;
+
+    validate_voice_id(&voice_id)?;
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let token_name = format!("VoiceLink_{}", voice_id);
@@ -594,10 +662,7 @@ fn toggle_voice(voice_id: String, enabled: bool) -> Result<(), String> {
 
     // Check if we have direct HKLM write access
     let has_access = hklm
-        .open_subkey_with_flags(
-            r"SOFTWARE\Microsoft\Speech\Voices\Tokens",
-            KEY_WRITE,
-        )
+        .open_subkey_with_flags(r"SOFTWARE\Microsoft\Speech\Voices\Tokens", KEY_WRITE)
         .is_ok();
 
     if enabled {
@@ -616,16 +681,23 @@ fn toggle_voice(voice_id: String, enabled: bool) -> Result<(), String> {
             return Err("COM DLL not registered. Run regsvr32 first.".to_string());
         }
 
-        let lang = if voice_id.starts_with('b') { "809" } else { "409" };
+        let lang = if voice_id.starts_with('b') {
+            "809"
+        } else {
+            "409"
+        };
         let is_qwen3 = voice_id.starts_with("qwen3_");
         let model_name = if is_qwen3 { "qwen3" } else { "kokoro" };
 
         let gender = if is_qwen3 {
             match voice_id.as_str() {
                 "qwen3_serena" | "qwen3_vivian" | "qwen3_ono_anna" | "qwen3_sohee" => "Female",
-                _ => "Male"
+                _ => "Male",
             }
-        } else if voice_id.contains("_m_") || voice_id.starts_with("am_") || voice_id.starts_with("bm_") {
+        } else if voice_id.contains("_m_")
+            || voice_id.starts_with("am_")
+            || voice_id.starts_with("bm_")
+        {
             "Male"
         } else {
             "Female"
@@ -642,8 +714,13 @@ fn toggle_voice(voice_id: String, enabled: bool) -> Result<(), String> {
             format!("{} (Qwen3)", name_part)
         } else {
             let raw_name = voice_id.split('_').last().unwrap_or(&voice_id);
-            format!("{} (Kokoro)",
-                raw_name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()
+            format!(
+                "{} (Kokoro)",
+                raw_name
+                    .chars()
+                    .next()
+                    .map(|c| c.to_uppercase().to_string())
+                    .unwrap_or_default()
                     + &raw_name[1..]
             )
         };
@@ -667,22 +744,42 @@ fn toggle_voice(voice_id: String, enabled: bool) -> Result<(), String> {
                     .create_subkey_with_flags(&token_path, KEY_WRITE)
                     .map_err(|e| format!("Failed to create token key: {}", e))?;
 
-                token_key.set_value("", &final_name).map_err(|e| e.to_string())?;
-                token_key.set_value("CLSID", &clsid).map_err(|e| e.to_string())?;
-                token_key.set_value("VoiceLinkVoiceId", &voice_id).map_err(|e| e.to_string())?;
-                token_key.set_value("VoiceLinkServerPort", &"7860").map_err(|e| e.to_string())?;
-                token_key.set_value("VoiceLinkModel", &model_name).map_err(|e| e.to_string())?;
+                token_key
+                    .set_value("", &final_name)
+                    .map_err(|e| e.to_string())?;
+                token_key
+                    .set_value("CLSID", &clsid)
+                    .map_err(|e| e.to_string())?;
+                token_key
+                    .set_value("VoiceLinkVoiceId", &voice_id)
+                    .map_err(|e| e.to_string())?;
+                token_key
+                    .set_value("VoiceLinkServerPort", &"7860")
+                    .map_err(|e| e.to_string())?;
+                token_key
+                    .set_value("VoiceLinkModel", &model_name)
+                    .map_err(|e| e.to_string())?;
 
                 let attrs_path = format!("{}\\Attributes", token_path);
                 let (attrs_key, _) = hklm
                     .create_subkey_with_flags(&attrs_path, KEY_WRITE)
                     .map_err(|e| format!("Failed to create attrs key: {}", e))?;
 
-                attrs_key.set_value("Name", &final_name).map_err(|e| e.to_string())?;
-                attrs_key.set_value("Gender", &gender).map_err(|e| e.to_string())?;
-                attrs_key.set_value("Language", &lang).map_err(|e| e.to_string())?;
-                attrs_key.set_value("Age", &"Adult").map_err(|e| e.to_string())?;
-                attrs_key.set_value("Vendor", &"VoiceLink").map_err(|e| e.to_string())?;
+                attrs_key
+                    .set_value("Name", &final_name)
+                    .map_err(|e| e.to_string())?;
+                attrs_key
+                    .set_value("Gender", &gender)
+                    .map_err(|e| e.to_string())?;
+                attrs_key
+                    .set_value("Language", &lang)
+                    .map_err(|e| e.to_string())?;
+                attrs_key
+                    .set_value("Age", &"Adult")
+                    .map_err(|e| e.to_string())?;
+                attrs_key
+                    .set_value("Vendor", &"VoiceLink")
+                    .map_err(|e| e.to_string())?;
             }
         } else {
             // Elevate: build PowerShell reg commands
@@ -693,17 +790,47 @@ fn toggle_voice(voice_id: String, enabled: bool) -> Result<(), String> {
                 let reg_path = format!("HKLM:\\{}\\{}", root, token_name);
                 let attrs_path = format!("{}\\Attributes", reg_path);
                 ps_cmds.push(format!("New-Item -Path '{}' -Force | Out-Null", reg_path));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name '(Default)' -Value '{}'", reg_path, safe_name));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'CLSID' -Value '{}'", reg_path, clsid));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'VoiceLinkVoiceId' -Value '{}'", reg_path, safe_vid));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'VoiceLinkServerPort' -Value '7860'", reg_path));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'VoiceLinkModel' -Value '{}'", reg_path, model_name));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name '(Default)' -Value '{}'",
+                    reg_path, safe_name
+                ));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name 'CLSID' -Value '{}'",
+                    reg_path, clsid
+                ));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name 'VoiceLinkVoiceId' -Value '{}'",
+                    reg_path, safe_vid
+                ));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name 'VoiceLinkServerPort' -Value '7860'",
+                    reg_path
+                ));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name 'VoiceLinkModel' -Value '{}'",
+                    reg_path, model_name
+                ));
                 ps_cmds.push(format!("New-Item -Path '{}' -Force | Out-Null", attrs_path));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Name' -Value '{}'", attrs_path, safe_name));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Gender' -Value '{}'", attrs_path, gender));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Language' -Value '{}'", attrs_path, lang));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Age' -Value 'Adult'", attrs_path));
-                ps_cmds.push(format!("Set-ItemProperty -Path '{}' -Name 'Vendor' -Value 'VoiceLink'", attrs_path));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name 'Name' -Value '{}'",
+                    attrs_path, safe_name
+                ));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name 'Gender' -Value '{}'",
+                    attrs_path, gender
+                ));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name 'Language' -Value '{}'",
+                    attrs_path, lang
+                ));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name 'Age' -Value 'Adult'",
+                    attrs_path
+                ));
+                ps_cmds.push(format!(
+                    "Set-ItemProperty -Path '{}' -Name 'Vendor' -Value 'VoiceLink'",
+                    attrs_path
+                ));
             }
             run_elevated_powershell(&ps_cmds.join("; "))?;
         }
@@ -757,9 +884,7 @@ async fn qwen3_list_speakers() -> Result<serde_json::Value, String> {
 #[tauri::command]
 async fn qwen3_delete_clone(voice_id: String) -> Result<(), String> {
     // Extract the profile name from voice_id ("qwen3_custom_Name" -> "Name")
-    let profile_name = voice_id
-        .strip_prefix("qwen3_custom_")
-        .unwrap_or(&voice_id);
+    let profile_name = voice_id.strip_prefix("qwen3_custom_").unwrap_or(&voice_id);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -767,7 +892,10 @@ async fn qwen3_delete_clone(voice_id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let resp = client
-        .delete(format!("http://127.0.0.1:7860/v1/qwen3/clone/{}", profile_name))
+        .delete(format!(
+            "http://127.0.0.1:7860/v1/qwen3/clone/{}",
+            profile_name
+        ))
         .send()
         .await
         .map_err(|e| format!("Server error: {}", e))?;
@@ -796,7 +924,13 @@ async fn qwen3_clone_voice(
         .map_err(|e| e.to_string())?;
 
     // Detect MIME type from extension
-    let mime = match audio_filename.rsplit('.').next().unwrap_or("wav").to_lowercase().as_str() {
+    let mime = match audio_filename
+        .rsplit('.')
+        .next()
+        .unwrap_or("wav")
+        .to_lowercase()
+        .as_str()
+    {
         "mp3" => "audio/mpeg",
         "m4a" | "mp4" | "aac" => "audio/mp4",
         "ogg" | "oga" => "audio/ogg",
@@ -903,7 +1037,12 @@ async fn qwen3_preview_voice(voice_id: String, text: String) -> Result<Vec<u8>, 
 
 /// Narrate long text with Qwen3 TTS — supports language selection
 #[tauri::command]
-async fn qwen3_narrate(voice_id: String, text: String, language: String, speed: f64) -> Result<Vec<u8>, String> {
+async fn qwen3_narrate(
+    voice_id: String,
+    text: String,
+    language: String,
+    speed: f64,
+) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()
@@ -961,19 +1100,18 @@ async fn save_wav_file(pcm_data: Vec<u8>) -> Result<Option<String>, String> {
     wav.extend_from_slice(&file_len.to_le_bytes());
     wav.extend_from_slice(b"WAVE");
     wav.extend_from_slice(b"fmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes());       // chunk size
-    wav.extend_from_slice(&1u16.to_le_bytes());        // PCM format
-    wav.extend_from_slice(&1u16.to_le_bytes());        // mono
+    wav.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
     wav.extend_from_slice(&sample_rate.to_le_bytes()); // sample rate
     wav.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
-    wav.extend_from_slice(&2u16.to_le_bytes());        // block align
-    wav.extend_from_slice(&16u16.to_le_bytes());       // bits per sample
+    wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&data_len.to_le_bytes());
     wav.extend_from_slice(&pcm_data);
 
-    std::fs::write(&path, &wav)
-        .map_err(|e| format!("Failed to save WAV: {}", e))?;
+    std::fs::write(&path, &wav).map_err(|e| format!("Failed to save WAV: {}", e))?;
 
     Ok(Some(path.to_string_lossy().to_string()))
 }
@@ -1002,15 +1140,21 @@ async fn qwen3_get_status() -> Result<serde_json::Value, String> {
 
 /// Check what's already installed and return setup status
 #[tauri::command]
-async fn get_setup_status(config: tauri::State<'_, Mutex<AppConfig>>) -> Result<SetupStatus, String> {
+async fn get_setup_status(
+    config: tauri::State<'_, Mutex<AppConfig>>,
+) -> Result<SetupStatus, String> {
     // Collect file-based checks while holding the lock, then drop it before network IO
     let (python_ok, deps_ok, server_ok, model_ok, data_dir_str) = {
         let cfg = config.lock().unwrap();
 
         let python_ok = cfg.python_exe().exists();
 
-        let embedded_deps = cfg.python_dir()
-            .join("Lib").join("site-packages").join("fastapi").exists();
+        let embedded_deps = cfg
+            .python_dir()
+            .join("Lib")
+            .join("site-packages")
+            .join("fastapi")
+            .exists();
         let deps_marker = cfg.data_dir().join(".deps_installed");
         let deps_ok = embedded_deps || deps_marker.exists();
 
@@ -1021,7 +1165,13 @@ async fn get_setup_status(config: tauri::State<'_, Mutex<AppConfig>>) -> Result<
         // successfully downloaded from HuggingFace to the local HF cache.
         let model_ok = cfg.data_dir().join(".voices_ready").exists();
 
-        (python_ok, deps_ok, server_ok, model_ok, cfg.data_dir.clone())
+        (
+            python_ok,
+            deps_ok,
+            server_ok,
+            model_ok,
+            cfg.data_dir.clone(),
+        )
     }; // MutexGuard dropped here — safe to do async IO now
 
     // Check if server is actually running via HTTP health endpoint (same as Dashboard)
@@ -1107,7 +1257,8 @@ async fn setup_download_file(
             );
         }
         Ok(())
-    }.await;
+    }
+    .await;
 
     // If download failed, remove the partial/empty file so it doesn't
     // trick the status check into thinking the model is downloaded.
@@ -1125,20 +1276,16 @@ async fn setup_extract_zip(zip_path: String, dest_dir: String) -> Result<(), Str
     let zip_path = PathBuf::from(&zip_path);
     let dest_dir = PathBuf::from(&dest_dir);
 
-    std::fs::create_dir_all(&dest_dir)
-        .map_err(|e| format!("Failed to create dir: {}", e))?;
+    std::fs::create_dir_all(&dest_dir).map_err(|e| format!("Failed to create dir: {}", e))?;
 
-    let file = std::fs::File::open(&zip_path)
-        .map_err(|e| format!("Failed to open zip: {}", e))?;
+    let file = std::fs::File::open(&zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
 
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("Failed to read zip: {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("Failed to read zip: {}", e))?;
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        let out_path = dest_dir.join(
-            entry.mangled_name()
-        );
+        let out_path = dest_dir.join(entry.mangled_name());
 
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
@@ -1256,7 +1403,8 @@ async fn setup_run_command(
         cmd.current_dir(dir);
     }
 
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to run {}: {}", program, e))?;
 
     // Store PID for qwen3 downloads so they can be cancelled/paused
@@ -1318,7 +1466,9 @@ async fn setup_run_command(
         lines.join("\n")
     });
 
-    let status = child.wait().await
+    let status = child
+        .wait()
+        .await
         .map_err(|e| format!("Failed to wait for {}: {}", program, e))?;
 
     // Clear download PID
@@ -1343,7 +1493,10 @@ async fn setup_run_command(
     if status.success() {
         Ok(stdout)
     } else {
-        Err(format!("Command failed:\nstdout: {}\nstderr: {}", stdout, stderr))
+        Err(format!(
+            "Command failed:\nstdout: {}\nstderr: {}",
+            stdout, stderr
+        ))
     }
 }
 
@@ -1381,19 +1534,26 @@ fn set_data_dir(config: tauri::State<'_, Mutex<AppConfig>>, new_dir: String) -> 
 /// Copy the server/ directory into the data dir.
 /// Resolves source automatically: bundled resource (production) or repo path (dev).
 #[tauri::command]
-fn setup_install_server(app: AppHandle, config: tauri::State<'_, Mutex<AppConfig>>) -> Result<(), String> {
+fn setup_install_server(
+    app: AppHandle,
+    config: tauri::State<'_, Mutex<AppConfig>>,
+) -> Result<(), String> {
     let cfg = config.lock().map_err(|e| e.to_string())?;
     let dest = cfg.server_dir();
 
     // Try 1: Bundled resource path (production install)
-    let resource_path = app.path().resource_dir()
+    let resource_path = app
+        .path()
+        .resource_dir()
         .map(|p| p.join("server"))
         .unwrap_or_default();
 
     // Try 2: Dev path relative to the Cargo project
     let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap_or(std::path::Path::new("."))
-        .parent().unwrap_or(std::path::Path::new("."))
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
         .join("server");
 
     let source = if resource_path.join("main.py").exists() {
@@ -1403,7 +1563,8 @@ fn setup_install_server(app: AppHandle, config: tauri::State<'_, Mutex<AppConfig
     } else {
         return Err(format!(
             "Server source not found.\n  Checked resource: {}\n  Checked dev: {}",
-            resource_path.display(), dev_path.display()
+            resource_path.display(),
+            dev_path.display()
         ));
     };
 
@@ -1422,8 +1583,7 @@ fn setup_install_server(app: AppHandle, config: tauri::State<'_, Mutex<AppConfig
                 }
                 copy_dir_recursive(&src_path, &dst_path)?;
             } else {
-                std::fs::copy(&src_path, &dst_path)
-                    .map_err(|e| format!("Copy failed: {}", e))?;
+                std::fs::copy(&src_path, &dst_path).map_err(|e| format!("Copy failed: {}", e))?;
             }
         }
         Ok(())
@@ -1434,7 +1594,9 @@ fn setup_install_server(app: AppHandle, config: tauri::State<'_, Mutex<AppConfig
 
 /// Get the paths used by the setup system
 #[tauri::command]
-fn get_setup_paths(config: tauri::State<'_, Mutex<AppConfig>>) -> Result<serde_json::Value, String> {
+fn get_setup_paths(
+    config: tauri::State<'_, Mutex<AppConfig>>,
+) -> Result<serde_json::Value, String> {
     let cfg = config.lock().map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "data_dir": cfg.data_dir(),
@@ -1597,8 +1759,8 @@ fn set_autostart_inner(enabled: bool) -> Result<(), String> {
     use winreg::RegKey;
 
     if enabled {
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("Failed to get exe path: {}", e))?;
+        let exe_path =
+            std::env::current_exe().map_err(|e| format!("Failed to get exe path: {}", e))?;
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (key, _) = hkcu
             .create_subkey(AUTOSTART_REG_KEY)
@@ -1714,7 +1876,10 @@ async fn server_watchdog(app: AppHandle) {
         if server_alive {
             // Server is healthy, reset restart counter
             if consecutive_restarts > 0 {
-                eprintln!("[watchdog] Server recovered after {} restart(s)", consecutive_restarts);
+                eprintln!(
+                    "[watchdog] Server recovered after {} restart(s)",
+                    consecutive_restarts
+                );
                 consecutive_restarts = 0;
             }
             continue;
@@ -1840,7 +2005,9 @@ pub fn run() {
         ])
         .setup(|app| {
             // Build tray menu
-            let show = MenuItemBuilder::new("Open VoiceLink").id("show").build(app)?;
+            let show = MenuItemBuilder::new("Open VoiceLink")
+                .id("show")
+                .build(app)?;
             let quit = MenuItemBuilder::new("Quit").id("quit").build(app)?;
             let menu = MenuBuilder::new(app)
                 .item(&show)

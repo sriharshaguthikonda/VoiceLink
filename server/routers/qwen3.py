@@ -120,6 +120,7 @@ router = APIRouter(prefix="/v1/qwen3", tags=["Qwen3 TTS"])
 
 # The Qwen3Model instance — set by main.py via set_qwen3_model()
 _qwen3_model = None  # type: ignore
+MAX_CLONE_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB hard cap
 
 
 def get_qwen3_model():
@@ -313,12 +314,24 @@ async def qwen3_clone_voice(
     audio_path = profile_dir / audio_filename
 
     try:
-        contents = await audio.read()
+        bytes_written = 0
         with open(audio_path, "wb") as f:
-            f.write(contents)
+            while True:
+                chunk = await audio.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > MAX_CLONE_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Audio file too large. Max {MAX_CLONE_UPLOAD_BYTES // (1024 * 1024)} MB.",
+                    )
+                f.write(chunk)
     except Exception as e:
         if profile_dir.exists():
             shutil.rmtree(profile_dir, ignore_errors=True)
+        if isinstance(e, HTTPException):
+            raise
         raise HTTPException(status_code=500, detail=f"Failed to save audio: {e}")
 
     # Convert any audio format to WAV for the model

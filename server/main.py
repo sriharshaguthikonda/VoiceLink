@@ -109,6 +109,7 @@ async def lifespan(app: FastAPI):
         logger.info("Qwen3: disabled")
 
     # Load the TTS model
+    model = None
     t0 = time.perf_counter()
     try:
         model = load_model(
