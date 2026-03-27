@@ -1943,41 +1943,6 @@ function formatTime(secs: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-/** Convert raw 16-bit PCM bytes to a WAV Blob */
-function pcmToWavBlob(pcmData: Uint8Array, sampleRate: number): Blob {
-  const numSamples = pcmData.length / 2;
-  const buffer = new ArrayBuffer(44 + pcmData.length);
-  const view = new DataView(buffer);
-
-  // RIFF header
-  writeString(view, 0, "RIFF");
-  view.setUint32(4, 36 + pcmData.length, true);
-  writeString(view, 8, "WAVE");
-
-  // fmt chunk
-  writeString(view, 12, "fmt ");
-  view.setUint32(16, 16, true);         // chunk size
-  view.setUint16(20, 1, true);          // PCM format
-  view.setUint16(22, 1, true);          // mono
-  view.setUint32(24, sampleRate, true); // sample rate
-  view.setUint32(28, sampleRate * 2, true); // byte rate
-  view.setUint16(32, 2, true);          // block align
-  view.setUint16(34, 16, true);         // bits per sample
-
-  // data chunk
-  writeString(view, 36, "data");
-  view.setUint32(40, pcmData.length, true);
-  new Uint8Array(buffer, 44).set(pcmData);
-
-  return new Blob([buffer], { type: "audio/wav" });
-}
-
-function writeString(view: DataView, offset: number, str: string) {
-  for (let i = 0; i < str.length; i++) {
-    view.setUint8(offset + i, str.charCodeAt(i));
-  }
-}
-
 // ============================================================================
 // PCM Playback
 // ============================================================================
