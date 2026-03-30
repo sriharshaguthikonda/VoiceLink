@@ -45,8 +45,8 @@ class ModelSettings(BaseSettings):
 
     # Which model backend to use
     default_model: str = Field(
-        default="kokoro",
-        description="Which TTS model to load on startup: kokoro, qwen3, etc.",
+        default="kokoro_onnx",  # Switch to ONNX for better performance
+        description="Which TTS model to load on startup: kokoro, kokoro_onnx, qwen3, etc.",
     )
 
     # Kokoro-specific

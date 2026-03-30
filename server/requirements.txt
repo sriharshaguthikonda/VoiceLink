@@ -21,5 +21,9 @@ pyyaml>=6.0                     # YAML config parsing
 soundfile>=0.13.0               # WAV/PCM I/O (already installed with kokoro)
 numpy>=1.26.0,<2.0              # Array operations (pinned by kokoro)
 
+# --- ONNX Runtime ---
+onnxruntime-gpu>=1.20.0         # GPU-accelerated ONNX inference
+transformers>=4.40.0            # For ONNX model loading
+
 # --- Utilities ---
 loguru>=0.7.0                   # Better logging with colors + rotation
