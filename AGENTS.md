@@ -2,6 +2,12 @@
 
 This file captures practical runtime guidance discovered from local benchmarking on `2026-03-31`.
 
+## Git Workflow Discipline
+
+- Use small, focused commits.
+- After each significant piece of work, commit and push immediately instead of batching many unrelated changes together.
+- Keep each commit message specific to that one completed unit of work.
+
 ## Kokoro ONNX Performance Baseline
 
 - Machine tested: Windows + NVIDIA GTX 1660
