@@ -146,6 +146,43 @@ No terminal commands. No configuration files. No Python installation. Just insta
 
 <br>
 
+## ⚡ Kokoro High-Speed Notes (Windows)
+
+If your priority is **maximum speaking speed** while keeping the **Sky** voice character:
+
+- Use Kokoro ONNX with **CUDAExecutionProvider**
+- Use `speed=2.0` (Kokoro valid range is `0.5` to `2.0`)
+- Prefer `kokoro-v1.0.onnx` on NVIDIA GPUs like GTX 1660
+
+### Benchmark Snapshot (af_sky, local Windows run)
+
+Measured on `2026-03-31` using `C:\Windows_software\VoiceLink\models\`:
+
+| Model | Provider | Speed | Realtime Factor | Effective Speaking Rate vs speed=1.0 |
+|:------|:---------|:-----:|:---------------:|:------------------------------------:|
+| `kokoro-v1.0.onnx` | CUDA | 2.0 | **1.60x** | **1.83x** |
+| `kokoro-v1.0.fp16.onnx` | CUDA | 2.0 | 0.97x | 1.80x |
+| `kokoro-v1.0.onnx` | CPU | 2.0 | 0.72x | 1.83x |
+| `kokoro-v1.0.int8.onnx` | CUDA | 2.0 | 0.42x | 1.80x |
+
+Key finding: **int8 was the slowest option on this hardware**. For this setup, full ONNX + CUDA was fastest and kept Sky voice timbre very close to baseline.
+
+### Runtime Controls
+
+- Force provider:
+  - `ONNX_PROVIDER=CUDAExecutionProvider`
+  - `ONNX_PROVIDER=CPUExecutionProvider`
+- Force model file:
+  - `VOICELINK_KOKORO_ONNX_MODEL_FILE=C:\Windows_software\VoiceLink\models\kokoro-v1.0.onnx`
+
+### Reproduce the Benchmark
+
+```powershell
+& "C:\Windows_software\VoiceLink\gpu_env\Scripts\python.exe" "C:\Windows_software\VoiceLink\scripts\benchmark_kokoro_sky_speed.py" --models-dir "C:\Windows_software\VoiceLink\models" --output-json "C:\Windows_software\VoiceLink\research\kokoro_sky_speed_benchmark_results.json" --output-audio-dir "C:\Windows_software\VoiceLink\research\kokoro_sky_samples"
+```
+
+<br>
+
 ## 🗣️ All Available Voices
 
 VoiceLink ships with **11 voices** powered by the [Kokoro](https://github.com/hexgrad/kokoro) model, plus **6 additional voices** and **voice cloning** through [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) (requires NVIDIA GPU):

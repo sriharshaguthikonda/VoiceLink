@@ -59,10 +59,10 @@ class TTSRequest(BaseModel):
         description="Voice ID (e.g. 'af_heart'). None = server default.",
     )
     speed: float = Field(
-        default=1.0,
+        default=2.0,
         ge=0.25,
         le=4.0,
-        description="Speed multiplier. 0.25 (very slow) to 4.0 (very fast).",
+        description="Speed multiplier. Default 2.0 for high-speed playback.",
     )
     format: str = Field(
         default="pcm_24k_16bit",

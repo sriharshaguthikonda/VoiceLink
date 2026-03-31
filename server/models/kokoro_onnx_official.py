@@ -19,6 +19,7 @@
 # It handles all the complexity we were struggling with manually
 # ============================================================================
 
+import os
 import numpy as np
 from typing import Generator, Optional
 from pathlib import Path
@@ -35,6 +36,12 @@ try:
 except ImportError as e:
     logger.error(f"Official kokoro-onnx package not available: {e}")
     KOKORO_ONNX_AVAILABLE = False
+
+try:
+    import onnxruntime as ort
+    ORT_AVAILABLE = True
+except Exception:
+    ORT_AVAILABLE = False
 
 
 class KokoroONNXOfficialModel(TTSModel):
@@ -58,6 +65,7 @@ class KokoroONNXOfficialModel(TTSModel):
         self.model_path: Optional[Path] = None
         self.voices_path: Optional[Path] = None
         self.kokoro: Optional[Kokoro] = None
+        self.provider: Optional[str] = None
         self._is_loaded = False
         self.sample_rate = 24000
         
@@ -73,26 +81,31 @@ class KokoroONNXOfficialModel(TTSModel):
         try:
             models_dir = Path("models")
             models_dir.mkdir(exist_ok=True)
-            
-            # Model file paths - try int8 quantized version first for better CPU performance
-            self.model_path = models_dir / "kokoro-v1.0.int8.onnx"
+            self.provider = self._select_provider()
+            self.model_path = self._select_model_path(models_dir, self.provider)
             self.voices_path = models_dir / "voices-v1.0.bin"
-            
-            if not self.model_path.exists():
-                # Fallback to full model if int8 not available
-                self.model_path = models_dir / "kokoro-v1.0.onnx"
-            
+
             if not self.model_path.exists() or not self.voices_path.exists():
                 raise FileNotFoundError(
                     f"Model files not found. Need: {self.model_path} and {self.voices_path}\n"
                     f"Download them from: https://github.com/thewh1teagle/kokoro-onnx/releases"
                 )
-            
-            model_type = "INT8 Quantized" if "int8" in self.model_path.name else "Full"
-            logger.info(f"Loading kokoro-onnx {model_type} model from {self.model_path}")
-            
-            # Initialize the official Kokoro model
-            self.kokoro = Kokoro(str(self.model_path), str(self.voices_path))
+
+            logger.info(
+                f"Loading kokoro-onnx model '{self.model_path.name}' "
+                f"with provider '{self.provider}'"
+            )
+
+            prev_provider = os.environ.get("ONNX_PROVIDER")
+            os.environ["ONNX_PROVIDER"] = self.provider
+            try:
+                # The provider is selected by kokoro_onnx through ONNX_PROVIDER env var.
+                self.kokoro = Kokoro(str(self.model_path), str(self.voices_path))
+            finally:
+                if prev_provider is None:
+                    os.environ.pop("ONNX_PROVIDER", None)
+                else:
+                    os.environ["ONNX_PROVIDER"] = prev_provider
             
             logger.info("Official kokoro-onnx model loaded successfully")
             self._is_loaded = True
@@ -101,6 +114,64 @@ class KokoroONNXOfficialModel(TTSModel):
             logger.error(f"Failed to load kokoro-onnx model: {e}")
             self._is_loaded = False
             raise
+
+    def _select_provider(self) -> str:
+        """
+        Choose ONNX provider deterministically.
+
+        Priority:
+        1) Explicit ONNX_PROVIDER env var
+        2) CUDA when device is 'auto'/'cuda' and CUDA provider exists
+        3) CPU fallback
+        """
+        env_provider = os.getenv("ONNX_PROVIDER")
+        if env_provider:
+            logger.info(f"Using ONNX provider from environment: {env_provider}")
+            return env_provider
+
+        available = ort.get_available_providers() if ORT_AVAILABLE else []
+        wants_cuda = self.device in ("auto", "cuda")
+        if wants_cuda and "CUDAExecutionProvider" in available:
+            return "CUDAExecutionProvider"
+        return "CPUExecutionProvider"
+
+    def _select_model_path(self, models_dir: Path, provider: str) -> Path:
+        """
+        Pick the best default model file for current runtime target.
+
+        For this project and hardware, full precision is typically the safest
+        high-speed option. INT8 can be slower on some GPUs, so it is kept as
+        fallback only.
+        """
+        explicit = os.getenv("VOICELINK_KOKORO_ONNX_MODEL_FILE")
+        if explicit:
+            explicit_path = Path(explicit)
+            if explicit_path.exists():
+                logger.info(f"Using explicit ONNX model file: {explicit_path}")
+                return explicit_path
+            logger.warning(
+                f"VOICELINK_KOKORO_ONNX_MODEL_FILE was set but not found: {explicit_path}"
+            )
+
+        if provider == "CUDAExecutionProvider":
+            candidates = [
+                models_dir / "kokoro-v1.0.onnx",
+                models_dir / "kokoro-v1.0.fp16.onnx",
+                models_dir / "kokoro-v1.0.int8.onnx",
+            ]
+        else:
+            candidates = [
+                models_dir / "kokoro-v1.0.onnx",
+                models_dir / "kokoro-v1.0.fp16.onnx",
+                models_dir / "kokoro-v1.0.int8.onnx",
+            ]
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+
+        # Preserve useful error details by returning the first candidate path.
+        return candidates[0]
 
     def unload(self) -> None:
         """Release the ONNX model from memory."""
@@ -242,7 +313,9 @@ class KokoroONNXOfficialModel(TTSModel):
     @property
     def model_name(self) -> str:
         """Human-readable model name."""
-        return "Kokoro ONNX Official v1.0"
+        model_suffix = self.model_path.name if self.model_path else "auto-model"
+        provider = self.provider or "auto-provider"
+        return f"Kokoro ONNX Official v1.0 ({model_suffix}, {provider})"
 
     @property
     def is_loaded(self) -> bool:
