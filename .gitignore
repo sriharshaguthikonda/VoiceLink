@@ -31,5 +31,8 @@ Desktop.ini
 # Conda
 .conda/
 
+# GPU environment
+gpu_env/
+
 # Personal notes
 add later.md
