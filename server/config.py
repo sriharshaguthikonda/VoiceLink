@@ -45,8 +45,8 @@ class ModelSettings(BaseSettings):
 
     # Which model backend to use
     default_model: str = Field(
-        default="kokoro",
-        description="Which TTS model to load on startup: kokoro, qwen3, etc.",
+        default="kokoro_pytorch",
+        description="Which TTS model to load on startup: kokoro, kokoro_pytorch, qwen3, etc.",
     )
 
     # Kokoro-specific
@@ -55,7 +55,7 @@ class ModelSettings(BaseSettings):
         description="Kokoro language: 'a' = American English, 'b' = British English.",
     )
     kokoro_default_voice: str = Field(
-        default="af_heart",
+        default="af_jessica",
         description="Default Kokoro voice ID if none specified in request.",
     )
 
