@@ -13,6 +13,7 @@
 
 import io
 import wave
+from pathlib import Path
 import numpy as np
 from typing import Generator, Optional
 from loguru import logger
@@ -56,6 +57,13 @@ class KokoroPyTorchModel(TTSModel):
         self.lang_code = 'a'  # American English
         
         # Voice metadata mapping
+        # Directory for user-supplied custom voice .pt files
+        self.custom_voices_dir = Path("models/custom_voices")
+
+        # Optional voices bundle (.bin NPZ) — overrides HF downloads for all voices it contains.
+        # Server prefers voices-v1.0-with-ava.bin if present, then voices-v1.0.bin.
+        self.voices_bundle: Path | None = self._find_voices_bundle()
+
         self.voice_info_map = {
             # American English Female
             'af_heart': VoiceInfo('af_heart', 'Heart', 'en-US', 'female', 
@@ -140,11 +148,107 @@ class KokoroPyTorchModel(TTSModel):
                 self._is_loaded = True
             else:
                 raise RuntimeError("Pipeline test failed")
+
+            # Load all voices from a .bin bundle (e.g. voices-v1.0-with-ava.bin)
+            self._load_voices_bundle()
+
+            # Load any custom .pt voice files from models/custom_voices/
+            self._load_custom_voices()
                 
         except Exception as e:
             logger.error(f"Failed to load Kokoro PyTorch model: {e}")
             self._is_loaded = False
             raise
+
+    @staticmethod
+    def _find_voices_bundle() -> "Path | None":
+        """Return the best available voices .bin bundle, or None."""
+        candidates = [
+            Path("models/voices-v1.0-with-ava.bin"),
+            Path("models/voices-v1.0.bin"),
+        ]
+        for p in candidates:
+            if p.exists():
+                return p
+        return None
+
+    def _load_voices_bundle(self) -> None:
+        """
+        Load all voices from a kokoro-onnx-format NPZ bundle (.bin file) into
+        the pipeline's voice cache.  Each key in the NPZ becomes a voice ID.
+
+        A bundle like voices-v1.0-with-ava.bin contains all 54 built-in voices
+        plus any custom voices (e.g. 'ava') injected by the notebook.
+        """
+        if self.voices_bundle is None:
+            return
+
+        import numpy as np
+        import torch
+
+        logger.info(f"Loading voices bundle: {self.voices_bundle}")
+        bundle = np.load(self.voices_bundle, allow_pickle=False)
+
+        loaded = 0
+        for voice_id, arr in bundle.items():
+            tensor = torch.from_numpy(arr.copy())
+            self.pipeline.voices[voice_id] = tensor
+
+            if voice_id not in self.voice_info_map:
+                name = voice_id.split("_", 1)[-1].title()
+                gender = "male" if voice_id.startswith(("am_", "bm_")) else "female"
+                language = "en-GB" if voice_id.startswith(("bf_", "bm_")) else "en-US"
+                self.voice_info_map[voice_id] = VoiceInfo(
+                    id=voice_id,
+                    name=name,
+                    language=language,
+                    gender=gender,
+                    description=f"Kokoro {name} voice",
+                    model="kokoro_pytorch",
+                    tags=[],
+                    sample_rate=self.sample_rate,
+                )
+            loaded += 1
+
+        logger.success(f"Loaded {loaded} voices from bundle ({self.voices_bundle.name})")
+
+    def _load_custom_voices(self) -> None:
+        """
+        Scan models/custom_voices/ for .pt files and inject each one into the
+        pipeline's voice cache so they can be referenced by filename stem.
+
+        A file named af_ava.pt becomes the voice ID "af_ava".
+        """
+        if not self.custom_voices_dir.exists():
+            return
+
+        import torch
+
+        for pt_file in sorted(self.custom_voices_dir.glob("*.pt")):
+            voice_id = pt_file.stem  # e.g. "af_ava"
+            try:
+                tensor = torch.load(pt_file, weights_only=True)
+                self.pipeline.voices[voice_id] = tensor
+
+                # Register metadata if not already present
+                if voice_id not in self.voice_info_map:
+                    name = voice_id.split("_", 1)[-1].title()  # "af_ava" → "Ava"
+                    gender = "male" if voice_id.startswith(("am_", "bm_")) else "female"
+                    language = "en-GB" if voice_id.startswith(("bf_", "bm_")) else "en-US"
+                    self.voice_info_map[voice_id] = VoiceInfo(
+                        id=voice_id,
+                        name=name,
+                        language=language,
+                        gender=gender,
+                        description=f"Custom voice: {name}",
+                        model="kokoro_pytorch",
+                        tags=["custom"],
+                        sample_rate=self.sample_rate,
+                    )
+
+                logger.success(f"Loaded custom voice '{voice_id}' from {pt_file}")
+            except Exception as e:
+                logger.warning(f"Could not load custom voice '{pt_file.name}': {e}")
 
     def unload(self) -> None:
         """Release the model from memory."""

@@ -7,6 +7,9 @@ import os
 
 VOICES = [
     "af_heart",
+    "af_ava",
+    "ava",
+    "af_sky",
     "af_bella",
     "af_nicole",
     "am_adam",
