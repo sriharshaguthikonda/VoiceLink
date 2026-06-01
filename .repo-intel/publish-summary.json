@@ -1,0 +1,39 @@
+﻿{
+    "schemaVersion":  "repo-map-artifact-branch/v1",
+    "repo":  "sriharshaguthikonda/VoiceLink",
+    "generatedAt":  "2026-06-01T06:27:12.8794419Z",
+    "source":  "Repo_maps GitHub footprint publish runner",
+    "publishBranch":  "repo-intel-artifacts",
+    "mapCount":  4,
+    "totalBytes":  3483640,
+    "maps":  [
+                 {
+                     "name":  "codex/matcha-tts-server",
+                     "ref":  "refs/remotes/origin/codex/matcha-tts-server",
+                     "commit":  "313f8c820de35c33656119ae4f8d2e202528f2c1",
+                     "path":  ".repo-intel/branches/remote-origin/codex-matcha-tts-server__313f8c820de3/repo-map-full.json",
+                     "bytes":  875296
+                 },
+                 {
+                     "name":  "codex/review-code-for-potential-issues",
+                     "ref":  "refs/remotes/origin/codex/review-code-for-potential-issues",
+                     "commit":  "c3b15373d53ecfa5f83c94968919d4d3c77192dd",
+                     "path":  ".repo-intel/branches/remote-origin/codex-review-code-for-potential-issues__c3b15373d53e/repo-map-full.json",
+                     "bytes":  824189
+                 },
+                 {
+                     "name":  "feature/onnx-backend",
+                     "ref":  "refs/remotes/origin/feature/onnx-backend",
+                     "commit":  "767ac6e43500b9cfc9166a1e5ffbcb085aeed03f",
+                     "path":  ".repo-intel/branches/remote-origin/feature-onnx-backend__767ac6e43500/repo-map-full.json",
+                     "bytes":  897605
+                 },
+                 {
+                     "name":  "main",
+                     "ref":  "refs/remotes/origin/main",
+                     "commit":  "1c1441671d3db88b5811adea4e89dd1d1c1d3aee",
+                     "path":  ".repo-intel/branches/remote-origin/main__1c1441671d3d/repo-map-full.json",
+                     "bytes":  871977
+                 }
+             ]
+}
